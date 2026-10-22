@@ -1,20 +1,44 @@
 {
   "name": "Rohan Vailala Thoma",
-  "location": "Hyderabad, India",
-  "target_titles": ["AI Engineer", "Machine Learning Engineer", "Backend Engineer (Python)", "GenAI Engineer"],
+  "email": "rohan@example.com",
+  "phone": "+91-9000000000",
+  "location": "Hyderabad, India (Open to Bengaluru & Remote)",
+  "github": "github.com/YOUR_USERNAME/relentless",
+  "linkedin": "linkedin.com/in/YOUR_LINKEDIN",
   "core_skills": [
-    "Python", "LangGraph", "LangChain", "FastAPI", "PostgreSQL", "pgvector",
-    "Asyncio", "Docker", "Streamlit", "OpenAI API", "Anthropic Claude", "Groq",
-    "Telegram Bot API", "REST APIs", "Git", "SQL", "Pydantic"
+    "Python", "LangGraph", "LLMs", "RAG", "System-1 Decision Models (Jev)",
+    "FastAPI", "PostgreSQL", "pgvector", "AsyncIO", "httpx", "Pydantic v2",
+    "Streamlit", "Docker", "Railway", "Telegram Bot API", "FastMCP", "SQL", "Git"
   ],
-  "personas": {
-    "ai_agent_engineer": "Focus on stateful multi-agent orchestration (LangGraph), System-1/System-2 routing, RAG/pgvector, and evaluation harnesses.",
-    "backend_python_engineer": "Focus on high-concurrency Python (asyncio, httpx, FastAPI), PostgreSQL schema design, and cloud deployment on Railway/Docker.",
-    "fullstack_data_engineer": "Focus on end-to-end data pipelines, Streamlit analytics apps, and automated bot workflows."
-  },
-  "experience_bullets": [
-    "Architected a 24/7 autonomous career copilot using LangGraph, PostgreSQL (pgvector), and System-1 decision models with calibrated probability triage.",
-    "Built production Streamlit and Telegram bot integrations (Project Emma) with asynchronous webhook/polling handlers and cloud deployment on Railway.",
-    "Engineered high-speed LLM inference workflows integrating OpenAI, Claude, and Groq APIs with strict Pydantic v2 structured output validation."
+  "experience_summary": "AI & Backend Engineer specializing in stateful multi-agent architectures (LangGraph), calibrated System-1/System-2 LLM pipelines, asynchronous Python microservices, and PostgreSQL/pgvector data stores.",
+  "experience": [
+    {
+      "company": "Independent AI Systems Engineering",
+      "role": "AI & Backend Engineer",
+      "Location": "Hyderabad, India",
+      "dates": "2025 – Present",
+      "bullets": [
+        "Architected Relentless, a 24/7 autonomous career copilot polling Greenhouse, Lever, Ashby, and Workday APIs into Neon PostgreSQL (pgvector) with SHA-256 deduplication.",
+        "Engineered a System-1/System-2 triage and tailoring pipeline combining TypeSafe Jev decision primitives (noul, score, choice) with LangGraph human-in-the-loop checkpointing.",
+        "Built a statistical ML evaluation harness measuring Precision@K (with Wilson 95% confidence intervals) and Brier calibration scores across live human feedback labels."
+      ]
+    },
+    {
+      "company": "Project Emma",
+      "role": "Lead Developer",
+      "Location": "Hyderabad, India",
+      "dates": "2024 – 2025",
+      "bullets": [
+        "Developed and deployed a full-stack automation platform integrating an asynchronous Python Telegram Bot with a Streamlit analytics frontend.",
+        "Managed cloud infrastructure, environment security, and continuous container deployments on Railway with automated health monitoring."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "degree": "Bachelor of Technology (B.Tech) in Computer Science / Engineering",
+      "institution": "University / Institute, India",
+      "dates": "Graduated"
+    }
   ]
 }
