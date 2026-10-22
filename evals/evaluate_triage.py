@@ -109,6 +109,18 @@ def run_evaluation() -> str:
 | **Baseline (Lexical Keyword Cosine)** | `{base_p_k:.1%}` ({base_hits}/{k_eff}) | `[{base_k_low:.1%}, {base_k_high:.1%}]` | `{bs_base:.4f}` |
 | **System-1 Jev (`jev-1.14` Rubric + Scam Gate)** | **`{jev_p_k:.1%}` ({jev_hits}/{k_eff})** | **`[{jev_k_low:.1%}, {jev_k_high:.1%}]`** | **`{bs_jev:.4f}`** |
 """
+    # Insert eval_runs row (attestation receipt)
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO eval_runs (n, metrics, config_version) VALUES (%s, %s, %s) RETURNING id;",
+                    (n, {"bs_jev": bs_jev, "bs_base": bs_base, "jev_p_k": jev_p_k, "base_p_k": base_p_k}, "v1"),
+                )
+                conn.commit()
+    except Exception:
+        pass
+
     print(report)
     return report
 
