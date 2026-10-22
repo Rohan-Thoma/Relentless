@@ -5,3 +5,5 @@ __pycache__/
 .env
 *.pdf
 .DS_Store
+.neon
+node_modules/

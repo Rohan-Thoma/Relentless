@@ -1,0 +1,20 @@
+{
+  "name": "Rohan Vailala Thoma",
+  "location": "Hyderabad, India",
+  "target_titles": ["AI Engineer", "Machine Learning Engineer", "Backend Engineer (Python)", "GenAI Engineer"],
+  "core_skills": [
+    "Python", "LangGraph", "LangChain", "FastAPI", "PostgreSQL", "pgvector",
+    "Asyncio", "Docker", "Streamlit", "OpenAI API", "Anthropic Claude", "Groq",
+    "Telegram Bot API", "REST APIs", "Git", "SQL", "Pydantic"
+  ],
+  "personas": {
+    "ai_agent_engineer": "Focus on stateful multi-agent orchestration (LangGraph), System-1/System-2 routing, RAG/pgvector, and evaluation harnesses.",
+    "backend_python_engineer": "Focus on high-concurrency Python (asyncio, httpx, FastAPI), PostgreSQL schema design, and cloud deployment on Railway/Docker.",
+    "fullstack_data_engineer": "Focus on end-to-end data pipelines, Streamlit analytics apps, and automated bot workflows."
+  },
+  "experience_bullets": [
+    "Architected a 24/7 autonomous career copilot using LangGraph, PostgreSQL (pgvector), and System-1 decision models with calibrated probability triage.",
+    "Built production Streamlit and Telegram bot integrations (Project Emma) with asynchronous webhook/polling handlers and cloud deployment on Railway.",
+    "Engineered high-speed LLM inference workflows integrating OpenAI, Claude, and Groq APIs with strict Pydantic v2 structured output validation."
+  ]
+}
