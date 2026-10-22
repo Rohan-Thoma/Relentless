@@ -1,9 +1,12 @@
-from typing import TypedDict, Optional
-from langgraph.graph import StateGraph, START, END
-from langgraph.types import interrupt
+from typing import TypedDict
+
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
+
 from src.db import get_connection
 from src.tailor.resume_tailor import tailor_resume_for_job
+
 
 class JobAgentState(TypedDict):
     job_id: int
@@ -11,10 +14,10 @@ class JobAgentState(TypedDict):
     title: str
     jd_text: str
     jev_persona: str
-    human_decision: Optional[str]       # APPLIED | SKIP_BAD_FIT | SKIP_SCAM
-    custom_edit_note: Optional[str]
-    tailored_diff: Optional[str]
-    pdf_path: Optional[str]
+    human_decision: str | None       # APPLIED | SKIP_BAD_FIT | SKIP_SCAM
+    custom_edit_note: str | None
+    tailored_diff: str | None
+    pdf_path: str | None
 
 async def hitl_approval_node(state: JobAgentState) -> JobAgentState:
     """Pauses graph execution via LangGraph interrupt() until the human clicks a Telegram button."""

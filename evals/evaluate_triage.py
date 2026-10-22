@@ -1,5 +1,7 @@
 import math
+
 from src.db import get_connection
+
 
 def wilson_95_ci(successes: int, total: int) -> tuple[float, float]:
     """Computes the 95% Wilson Score Confidence Interval for small-n binomial proportions."""
@@ -30,24 +32,23 @@ def precision_at_k(sorted_labels: list[int], k: int) -> tuple[float, int, int]:
     return (hits / k_eff, hits, k_eff)
 
 def run_evaluation() -> str:
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS total FROM jobs;")
-            total_ingested = cur.fetchone()["total"]
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS total FROM jobs;")
+        total_ingested = cur.fetchone()["total"]
 
-            cur.execute("SELECT COUNT(*) AS passed FROM jobs WHERE triage_passed = TRUE;")
-            total_passed = cur.fetchone()["passed"]
+        cur.execute("SELECT COUNT(*) AS passed FROM jobs WHERE triage_passed = TRUE;")
+        total_passed = cur.fetchone()["passed"]
 
-            cur.execute(
-                """
+        cur.execute(
+            """
                 SELECT id, company, title, cosine_sim, jev_fit_prob, jev_scam_prob,
                        jev_fit_tier, human_action, outcome_status
                 FROM jobs
                 WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM')
                 ORDER BY human_action_at DESC;
                 """
-            )
-            labeled_rows = cur.fetchall()
+        )
+        labeled_rows = cur.fetchall()
 
     n = len(labeled_rows)
     if n == 0:
@@ -105,7 +106,7 @@ def run_evaluation() -> str:
 
 | Ranking / Triage Method | Precision@{k_eff} | 95% Wilson Confidence Interval | Brier Calibration Error |
 |---|---|---|---|
-| **Baseline (Lexical/Keyword Cosine Sim)** | `{base_p_k:.1%}` ({base_hits}/{k_eff}) | `[{base_k_low:.1%}, {base_k_high:.1%}]` | `{bs_base:.4f}` |
+| **Baseline (Lexical Keyword Cosine)** | `{base_p_k:.1%}` ({base_hits}/{k_eff}) | `[{base_k_low:.1%}, {base_k_high:.1%}]` | `{bs_base:.4f}` |
 | **System-1 Jev (`jev-1.14` Rubric + Scam Gate)** | **`{jev_p_k:.1%}` ({jev_hits}/{k_eff})** | **`[{jev_k_low:.1%}, {jev_k_high:.1%}]`** | **`{bs_jev:.4f}`** |
 """
     print(report)

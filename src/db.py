@@ -1,8 +1,9 @@
-import os
 import hashlib
-import psycopg
-from psycopg.rows import dict_row
+import os
+
 from dotenv import load_dotenv
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 load_dotenv()
 
@@ -48,30 +49,49 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 """
 
+_POOL = None
+
+
+def _dsn():
+    return os.getenv("DATABASE_URL_POOLER") or os.getenv("DATABASE_URL")
+
+
+def get_pool():
+    global _POOL
+    if _POOL is None:
+        if not _dsn():
+            raise ValueError("DATABASE_URL is missing in .env")
+        _POOL = ConnectionPool(conninfo=_dsn(), kwargs={"row_factory": dict_row}, open=False)
+        _POOL.open()
+    return _POOL
+
+
 def get_connection():
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
+    if not _dsn():
         raise ValueError("DATABASE_URL is missing in .env")
-    return psycopg.connect(db_url, row_factory=dict_row)
+    return get_pool().connection()
+
+
+def close_pool():
+    global _POOL
+    if _POOL is not None:
+        _POOL.close()
+        _POOL = None
+
 
 def make_dedup_hash(company: str, title: str, location: str) -> str:
     norm = f"{company.strip().lower()}|{title.strip().lower()}|{location.strip().lower()}"
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
+
 def init_db():
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(SCHEMA_SQL)
-        conn.commit()
-    print("✅ Neon PostgreSQL initialized (jobs + private app_settings tables ready)!")
+    from src.db_migrate import run_migrations
+
+    run_migrations()
+    print("✅ Neon PostgreSQL initialized (migrations applied)!")
+
 
 def reset_database(mode: str = "labels") -> str:
-    """
-    Granular Reset Engine for experimentation vs. live production:
-    - 'labels': Soft reset. Keeps scraped jobs & Jev scores, wipes only human button clicks & diffs.
-    - 'triage': Medium reset. Keeps scraped jobs, wipes Jev scores + human clicks so you can re-triage.
-    - 'all': Hard factory reset. Wipes all jobs and resets ID counter to 1.
-    """
     with get_connection() as conn:
         with conn.cursor() as cur:
             if mode == "labels":
@@ -110,6 +130,7 @@ def reset_database(mode: str = "labels") -> str:
         conn.commit()
     print(msg)
     return msg
+
 
 if __name__ == "__main__":
     init_db()

@@ -1,11 +1,15 @@
+import json
+import logging
 import os
 import re
-import json
+
 import httpx
 import typst
-from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from src.settings_store import load_master_profile
+from pydantic import BaseModel, Field
+
+from src.httpx_utils import post_with_retry
+from src.settings_store import get_master_profile
 
 load_dotenv()
 
@@ -13,7 +17,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "").strip()
 
-PROFILE = load_master_profile()
+logger = logging.getLogger(__name__)
 
 class TailoredResumeOutput(BaseModel):
     tailored_summary: str = Field(description="2-sentence executive summary tailored to the target role.")
@@ -39,6 +43,8 @@ async def verify_no_hallucination_with_jev(client: httpx.AsyncClient, tailored: 
     if not api_key:
         return 0.05
 
+    PROFILE = get_master_profile()
+
     payload = {
         "model": model_id,
         "state": {
@@ -60,7 +66,8 @@ async def verify_no_hallucination_with_jev(client: httpx.AsyncClient, tailored: 
         },
     }
     try:
-        resp = await client.post(
+        resp = await post_with_retry(
+            client,
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload,
@@ -74,6 +81,7 @@ async def verify_no_hallucination_with_jev(client: httpx.AsyncClient, tailored: 
 
 def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
     """Compiles a clean, single-column ATS-compliant PDF using Typst."""
+    PROFILE = get_master_profile()
     os.makedirs("output", exist_ok=True)
     safe_company = re.sub(r"[^a-zA-Z0-9]+", "_", company).strip("_")
     typ_path = f"output/resume_{safe_company}.typ"
@@ -141,6 +149,7 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
 
 async def tailor_resume_for_job(job: dict, custom_instruction: str = "") -> dict:
     """Runs System-2 Surgical Tailoring (OpenAI Direct or OpenRouter) + Jev Hallucination Audit + Typst PDF."""
+    PROFILE = get_master_profile()
     if OPENAI_API_KEY:
         llm_url = "https://api.openai.com/v1/chat/completions"
         llm_key = OPENAI_API_KEY
@@ -178,7 +187,8 @@ Return ONLY valid JSON matching this schema:
 }}"""
 
     async with httpx.AsyncClient(timeout=35.0) as client:
-        resp = await client.post(
+        resp = await post_with_retry(
+            client,
             llm_url,
             headers={"Authorization": f"Bearer {llm_key}", "Content-Type": "application/json"},
             json={

@@ -1,8 +1,11 @@
 import asyncio
-import yaml
+
 import httpx
+import yaml
 from bs4 import BeautifulSoup
+
 from src.db import get_connection, make_dedup_hash
+from src.httpx_utils import get_with_retry, post_with_retry
 
 with open("config/config.yaml", "r") as f:
     CONFIG = yaml.safe_load(f)
@@ -49,7 +52,7 @@ def insert_job(conn, source_ats: str, company: str, title: str, location: str, a
 
 async def poll_greenhouse(client: httpx.AsyncClient, conn, board: str) -> int:
     url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
-    resp = await client.get(url)
+    resp = await get_with_retry(client, url)
     if resp.status_code != 200:
         return 0
     added = 0
@@ -64,7 +67,7 @@ async def poll_greenhouse(client: httpx.AsyncClient, conn, board: str) -> int:
 
 async def poll_lever(client: httpx.AsyncClient, conn, site: str) -> int:
     url = f"https://api.lever.co/v0/postings/{site}?mode=json"
-    resp = await client.get(url)
+    resp = await get_with_retry(client, url)
     if resp.status_code != 200:
         return 0
     added = 0
@@ -79,7 +82,7 @@ async def poll_lever(client: httpx.AsyncClient, conn, site: str) -> int:
 
 async def poll_ashby(client: httpx.AsyncClient, conn, board: str) -> int:
     url = f"https://api.ashbyhq.com/posting-api/job-board/{board}"
-    resp = await client.get(url)
+    resp = await get_with_retry(client, url)
     if resp.status_code != 200:
         return 0
     added = 0
@@ -101,7 +104,7 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
     payload = {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": "AI OR Machine Learning OR Python OR Backend"}
     
     try:
-        resp = await client.post(list_url, json=payload, headers={"Accept": "application/json"})
+        resp = await post_with_retry(client, list_url, json=payload, headers={"Accept": "application/json"})
         if resp.status_code != 200:
             return 0
     except Exception:
@@ -119,7 +122,7 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
         if job_exists(conn, make_dedup_hash(company, title, loc)):
             continue
 
-        detail_resp = await client.get(f"{base}{ext_path}", headers={"Accept": "application/json"})
+        detail_resp = await get_with_retry(client, f"{base}{ext_path}", headers={"Accept": "application/json"})
         if detail_resp.status_code == 200:
             info = detail_resp.json().get("jobPostingInfo", {})
             jd = clean_html(info.get("jobDescription", ""))

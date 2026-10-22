@@ -1,0 +1,8 @@
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = ["S110", "BLE001", "ASYNC230", "SIM102", "SIM103", "RUF046", "I001"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

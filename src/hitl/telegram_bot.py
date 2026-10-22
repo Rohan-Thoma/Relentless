@@ -1,10 +1,12 @@
-import os
 import asyncio
+import os
+
 import httpx
 from dotenv import load_dotenv
+
+from evals.evaluate_triage import run_evaluation
 from src.db import get_connection, reset_database
 from src.orchestrator.graph import RELENTLESS_GRAPH
-from evals.evaluate_triage import run_evaluation
 
 load_dotenv()
 
@@ -30,10 +32,9 @@ async def send_pending_digests(limit: int = 5):
     if not BOT_TOKEN or not CHAT_ID:
         raise ValueError("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in .env")
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT id, source_ats, company, title, location, apply_url,
                        jev_fit_prob, jev_fit_tier, jev_scam_prob, jev_persona, cosine_sim
                 FROM jobs
@@ -42,9 +43,9 @@ async def send_pending_digests(limit: int = 5):
                 ORDER BY jev_fit_prob DESC
                 LIMIT %s;
                 """,
-                (limit,),
-            )
-            jobs = cur.fetchall()
+            (limit,),
+        )
+        jobs = cur.fetchall()
 
     if not jobs:
         print("📭 No unreviewed triaged jobs to send right now.")
@@ -96,14 +97,13 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str):
         await send_pending_digests(limit=5)
         return
     elif cmd == "/status":
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) AS c FROM jobs;")
-                total = cur.fetchone()["c"]
-                cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE triage_passed = TRUE;")
-                passed = cur.fetchone()["c"]
-                cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE human_action IS NOT NULL;")
-                labeled = cur.fetchone()["c"]
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM jobs;")
+            total = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE triage_passed = TRUE;")
+            passed = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE human_action IS NOT NULL;")
+            labeled = cur.fetchone()["c"]
         reply = (
             f"📊 *Database Status*\n"
             f"• Total Scraped Jobs: `{total}`\n"
@@ -228,7 +228,11 @@ async def listen_for_button_clicks():
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"⚠️ Loop error: {e}")
+                import logging
+
+                from src.notify import alert
+                logging.getLogger(__name__).error("Loop error: %s", e)
+                alert(f"⚠️ Loop error: {e}")
                 await asyncio.sleep(3)
 
 async def main():

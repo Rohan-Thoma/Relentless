@@ -1,20 +1,24 @@
+import asyncio
+import logging
+import math
 import os
 import re
-import json
-import math
-import asyncio
-import httpx
 from collections import Counter
+
+import httpx
 from dotenv import load_dotenv
+
 from src.db import get_connection
-from src.settings_store import load_master_profile
+from src.httpx_utils import post_with_retry
+from src.notify import alert
+from src.settings_store import get_master_profile
 
 load_dotenv()
 
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
-PROFILE = load_master_profile()
+logger = logging.getLogger(__name__)
 
 SCORE_TIER_LABELS = ["reject", "weak_fit", "moderate_fit", "strong_fit", "dream_role"]
 
@@ -22,6 +26,7 @@ def compute_baseline_similarity(jd_text: str) -> float:
     """Computes a fast baseline cosine similarity between profile skills and JD text for the Eval Harness."""
     if not jd_text:
         return 0.0
+    PROFILE = get_master_profile()
     summary_str = PROFILE.get("experience_summary", "")
     profile_text = " ".join(PROFILE.get("core_skills", []) + [summary_str]).lower()
     words_a = re.findall(r"[a-z0-9+#]{2,}", profile_text)
@@ -50,6 +55,8 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
         model_id = "typesafe/jev-1.14"
     else:
         raise ValueError("Set either TYPESAFE_API_KEY or OPENROUTER_API_KEY in your .env file!")
+
+    PROFILE = get_master_profile()
 
     payload = {
         "model": model_id,
@@ -97,7 +104,8 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
         },
     }
 
-    resp = await client.post(
+    resp = await post_with_retry(
+        client,
         url,
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -197,7 +205,8 @@ async def run_triage(batch_limit: int = 25):
                         f"-> Fit: {res['jev_fit_prob']:.2f} ({res['jev_fit_tier']}) | Scam: {res['jev_scam_prob']:.2f}"
                     )
                 except Exception as e:
-                    print(f"  ⚠️ Error scoring job #{job['id']} ({job['company']}): {e}")
+                    logger.error("Error scoring job #%s (%s): %s", job["id"], job["company"], e)
+                    alert(f"⚠️ Error scoring job #{job['id']} ({job['company']}): {e}")
 
         print(f"\n🎯 Jev Triage finished! {passed_count}/{len(unscored_jobs)} jobs cleared the gate.")
 

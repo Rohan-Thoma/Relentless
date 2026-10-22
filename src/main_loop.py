@@ -1,9 +1,14 @@
-import os
 import asyncio
+import logging
+import os
+
 from src.db import init_db
+from src.hitl.telegram_bot import listen_for_button_clicks, send_pending_digests
 from src.ingestors.ats_poller import run_ingestion
+from src.notify import alert
 from src.triage.jev_judge import run_triage
-from src.hitl.telegram_bot import send_pending_digests, listen_for_button_clicks
+
+logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_HOURS = float(os.getenv("POLL_INTERVAL_HOURS", "4.0"))
 
@@ -17,7 +22,8 @@ async def scheduled_pipeline_worker():
             await send_pending_digests(limit=5)
             print(f"✅ [Scheduler] Cycle complete. Sleeping for {POLL_INTERVAL_HOURS} hours...")
         except Exception as e:
-            print(f"⚠️ [Scheduler] Error during cycle: {e}")
+            logger.error("Scheduler error during cycle: %s", e)
+            alert(f"⚠️ Scheduler error during cycle: {e}")
         await asyncio.sleep(POLL_INTERVAL_HOURS * 3600)
 
 async def main():

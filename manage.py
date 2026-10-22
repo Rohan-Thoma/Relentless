@@ -1,12 +1,16 @@
 import os
-import sys
 import shutil
+import sys
 import time
+
 import httpx
 from dotenv import load_dotenv, set_key
-from src.db import init_db, reset_database, get_connection
-from src.settings_store import sync_local_to_db, LOCAL_PROFILE_PATH, EXAMPLE_PROFILE_PATH
+
 from evals.evaluate_triage import run_evaluation
+from src.db import get_connection, init_db, reset_database, get_pool, close_pool
+from src.db_migrate import pending_migrations
+from src.settings_store import EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH, sync_local_to_db
+from src.httpx_utils import get_with_retry
 
 ENV_FILE = ".env"
 
@@ -64,18 +68,55 @@ def interactive_setup():
 def run_doctor():
     load_dotenv(ENV_FILE, override=True)
     print("\n🩺 Running Relentless System Health Check...\n")
-    with get_connection() as conn:
-        with conn.cursor() as cur:
+    try:
+        pool = get_pool()
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1;")
+            cur.fetchone()
+        print("  ✅ Connection pool: OK")
+    except Exception as e:
+        print(f"  ❌ Connection pool: {e}")
+
+    total = 0
+    has_cloud_profile = False
+    try:
+        with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS total FROM jobs;")
             total = cur.fetchone()["total"]
             cur.execute("SELECT COUNT(*) AS s FROM app_settings WHERE key = 'master_profile';")
             has_cloud_profile = cur.fetchone()["s"] > 0
-    print(f"  ✅ Neon PostgreSQL: Connected ({total} jobs in DB)")
+        print(f"  ✅ Neon PostgreSQL: Connected ({total} jobs in DB)")
+    except Exception as e:
+        print(f"  ❌ Neon PostgreSQL: {e}")
+
+    try:
+        pending = pending_migrations()
+        print(f"  ✅ Migrations: {len(pending)} pending")
+    except Exception as e:
+        print(f"  ❌ Migrations: {e}")
+
+    try:
+        import asyncio
+
+        async def _smoke():
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await get_with_retry(client, "https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true")
+                return resp.status_code
+
+        code = asyncio.run(_smoke())
+        print(f"  ✅ Retry helper smoke: HTTP {code}")
+    except Exception as e:
+        print(f"  ⚠️ Retry helper smoke: {e}")
+
     print(f"  ✅ Private Cloud Profile Synced: {'Yes (Railway-ready!)' if has_cloud_profile else 'No (Run: python manage.py sync)'}")
     print(f"  ✅ Local master_profile.json gitignored: {os.path.exists(LOCAL_PROFILE_PATH)}")
     print(f"  ✅ OpenRouter Key Set: {bool(os.getenv('OPENROUTER_API_KEY'))}")
     print(f"  ✅ OpenAI Key Set: {bool(os.getenv('OPENAI_API_KEY'))}")
     print(f"  ✅ Telegram Bot Configured: {bool(os.getenv('TELEGRAM_BOT_TOKEN') and os.getenv('TELEGRAM_CHAT_ID'))}\n")
+    try:
+        close_pool()
+    except Exception:
+        pass
 
 def print_help():
     print(
@@ -110,6 +151,7 @@ if __name__ == "__main__":
         run_evaluation()
     elif cmd == "run":
         import asyncio
+
         from src.main_loop import main as run_loop
         asyncio.run(run_loop())
     else:
