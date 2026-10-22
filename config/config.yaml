@@ -1,0 +1,54 @@
+candidate_preferences:
+  target_role_keywords:
+    - "ai"
+    - "machine learning"
+    - "ml"
+    - "llm"
+    - "genai"
+    - "agent"
+    - "python"
+    - "backend"
+    - "data"
+    - "software engineer"
+  exclude_title_keywords:
+    - "staff"
+    - "principal"
+    - "director"
+    - "manager"
+    - "ios"
+    - "android"
+    - "frontend"
+  allowed_locations:
+    - "hyderabad"
+    - "india"
+    - "remote"
+    - "bengaluru"
+    - "bangalore"
+
+ats_targets:
+  greenhouse:
+    - "stripe"
+    - "postman"
+    - "razorpay"
+    - "rubrik"
+    - "databricks"
+  lever:
+    - "zeta"
+    - "palantir"
+  ashby:
+    - "supabase"
+    - "langfuse"
+    - "linear"
+  workday_cxs:
+    - company: "NVIDIA"
+      tenant: "nvidia"
+      wd_instance: "wd5"
+      site: "NVIDIAExternalCareerSite"
+    - company: "Salesforce"
+      tenant: "salesforce"
+      wd_instance: "wd12"
+      site: "External_Career_Site"
+    - company: "Adobe"
+      tenant: "adobe"
+      wd_instance: "wd5"
+      site: "external_experienced"

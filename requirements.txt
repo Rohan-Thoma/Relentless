@@ -1,0 +1,12 @@
+httpx
+pyyaml
+python-dotenv
+pydantic
+psycopg[binary]
+pgvector
+beautifulsoup4
+langgraph
+langgraph-checkpoint-postgres
+groq
+typst
+fastmcp
