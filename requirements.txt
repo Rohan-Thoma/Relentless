@@ -1,4 +1,5 @@
 httpx
+playwright
 pyyaml
 python-dotenv
 pydantic

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from evals.evaluate_triage import run_evaluation
 from src.db import get_connection, reset_database
 from src.orchestrator.graph import RELENTLESS_GRAPH
+from datetime import UTC
 
 load_dotenv()
 
@@ -24,6 +25,9 @@ def build_inline_keyboard(job_id: int) -> dict:
             [
                 {"text": "🚫 Skip: Ghost/Scam", "callback_data": f"act:SKIP_SCAM:{job_id}"},
                 {"text": "⭐ Got Callback!", "callback_data": f"out:CALLBACK:{job_id}"},
+            ],
+            [
+                {"text": "🤖 Auto Apply", "callback_data": f"apply:auto:{job_id}"},
             ],
         ]
     }
@@ -118,6 +122,27 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str):
         reply = reset_database("triage")
     elif cmd == "/wipe_all":
         reply = reset_database("all")
+    elif cmd == "/stop_apply":
+        from psycopg.types.json import Jsonb
+        from datetime import datetime, timedelta
+        until = datetime.now(UTC) + timedelta(hours=24)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES ('automation_paused_until', %s, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();",
+                    (Jsonb(until.isoformat()),),
+                )
+            conn.commit()
+        reply = f"⏸️ Auto-apply paused until {until.isoformat()}"
+    elif cmd == "/apply_status":
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT job_id, status, router_path, started_at FROM apply_events ORDER BY started_at DESC LIMIT 10;")
+                rows = cur.fetchall()
+        lines = ["📋 Last apply events:"]
+        for r in rows:
+            lines.append(f"• Job {r['job_id']}: {r['status']} ({r['router_path']})")
+        reply = "\\n".join(lines) if rows else "No apply events yet."
     else:
         return
 
@@ -157,6 +182,23 @@ async def listen_for_button_clicks():
 
                     kind, label, job_id_str = parts[0], parts[1], parts[2]
                     job_id = int(job_id_str)
+
+                    if kind == "apply":
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT id, company, title, apply_url, jev_fit_prob, jev_fit_tier, jev_persona FROM jobs WHERE id = %s;", (job_id,))
+                                job_row = cur.fetchone()
+                        if job_row:
+                            from src.apply.runner import attempt_apply
+                            job_dict = dict(job_row)
+                            job_dict["pdf_path"] = None
+                            res = await attempt_apply(job_dict, mode="CONFIRM")
+                            await client.post(
+                                f"{TG_BASE}/sendMessage",
+                                json={"chat_id": CHAT_ID, "text": f"Apply result for {job_row['company']}: {res.get('status')} {res.get('error') or ''}"},
+                            )
+                        await client.post(f"{TG_BASE}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Apply triggered"})
+                        continue
 
                     with get_connection() as conn:
                         with conn.cursor() as cur:

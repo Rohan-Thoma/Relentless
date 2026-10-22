@@ -56,3 +56,12 @@ ats_targets:
   smartrecruiters: []
   # recruitee: ["company-slug"]
   recruitee: []
+
+automation:
+  apply_mode: DRY_RUN
+  daily_cap: 5
+  per_company_cooldown_hours: 72
+  min_fit_prob: 0.70
+  allowed_tiers: [strong_fit, dream_role]
+  max_free_text_questions: 0
+  first_company_confirm: true
