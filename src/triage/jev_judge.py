@@ -7,14 +7,14 @@ import httpx
 from collections import Counter
 from dotenv import load_dotenv
 from src.db import get_connection
+from src.settings_store import load_master_profile
 
 load_dotenv()
 
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
-with open("config/master_profile.json", "r") as f:
-    PROFILE = json.load(f)
+PROFILE = load_master_profile()
 
 SCORE_TIER_LABELS = ["reject", "weak_fit", "moderate_fit", "strong_fit", "dream_role"]
 

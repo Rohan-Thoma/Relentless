@@ -1,0 +1,43 @@
+{
+  "name": "Alex Developer",
+  "email": "alex@example.com",
+  "phone": "+91-9000000000",
+  "location": "Hyderabad, India (Open to Bengaluru & Remote)",
+  "github": "github.com/username/relentless",
+  "linkedin": "linkedin.com/in/username",
+  "core_skills": [
+    "Python", "LangGraph", "LLMs", "RAG", "System-1 Decision Models (Jev)",
+    "FastAPI", "PostgreSQL", "pgvector", "AsyncIO", "Docker", "SQL"
+  ],
+  "experience_summary": "AI & Backend Engineer specializing in stateful multi-agent architectures, calibrated System-1/System-2 LLM pipelines, and asynchronous Python services.",
+  "experience": [
+    {
+      "company": "Example Tech Corp",
+      "role": "AI & Backend Engineer",
+      "Location": "Hyderabad, India",
+      "dates": "2025 – Present",
+      "bullets": [
+        "Architected an autonomous career triage pipeline polling ATS APIs into PostgreSQL (pgvector) with SHA-256 deduplication.",
+        "Engineered a System-1/System-2 pipeline combining Jev decision primitives with LangGraph human-in-the-loop checkpointing.",
+        "Built a statistical evaluation harness measuring Precision@K (with Wilson 95% confidence intervals) and Brier calibration scores."
+      ]
+    },
+    {
+      "company": "Previous Startup",
+      "role": "Software Developer",
+      "Location": "Hyderabad, India",
+      "dates": "2024 – 2025",
+      "bullets": [
+        "Developed full-stack automation services integrating asynchronous Python bots with Streamlit analytics dashboards.",
+        "Managed containerized cloud deployments and automated health monitoring."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "degree": "B.Tech in Computer Science & Engineering",
+      "institution": "Institute of Technology",
+      "dates": "Graduated"
+    }
+  ]
+}

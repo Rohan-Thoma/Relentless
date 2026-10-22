@@ -2,8 +2,9 @@ import os
 import asyncio
 import httpx
 from dotenv import load_dotenv
-from src.db import get_connection
+from src.db import get_connection, reset_database
 from src.orchestrator.graph import RELENTLESS_GRAPH
+from evals.evaluate_triage import run_evaluation
 
 load_dotenv()
 
@@ -36,7 +37,7 @@ async def send_pending_digests(limit: int = 5):
                 SELECT id, source_ats, company, title, location, apply_url,
                        jev_fit_prob, jev_fit_tier, jev_scam_prob, jev_persona, cosine_sim
                 FROM jobs
-                WHERE jev_fit_prob IS NOT NULL
+                WHERE triage_passed = TRUE
                   AND human_action IS NULL
                 ORDER BY jev_fit_prob DESC
                 LIMIT %s;
@@ -77,8 +78,56 @@ async def send_pending_digests(limit: int = 5):
                 print(f"📲 Sent Telegram card for [{j['company']}] {j['title']} (Job #{j['id']})")
             await asyncio.sleep(0.4)
 
+async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str):
+    """Handles remote management and reset commands sent directly from your Telegram phone chat."""
+    cmd = cmd_text.strip().split()[0].lower()
+
+    if cmd in ("/start", "/help"):
+        reply = (
+            "🤖 *Relentless v1.0 Control Center*\n\n"
+            "• `/digest` — Send top 5 unreviewed job matches\n"
+            "• `/status` — Check database & label counts\n"
+            "• `/eval` — View live Precision@K & Brier calibration report\n"
+            "• `/reset_labels` — Soft Reset: clear button clicks & reset Eval Harness (`n=0`)\n"
+            "• `/reset_triage` — Medium Reset: clear Jev scores + labels to re-score jobs\n"
+            "• `/wipe_all` — Hard Reset: delete all scraped jobs & start fresh"
+        )
+    elif cmd == "/digest":
+        await send_pending_digests(limit=5)
+        return
+    elif cmd == "/status":
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS c FROM jobs;")
+                total = cur.fetchone()["c"]
+                cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE triage_passed = TRUE;")
+                passed = cur.fetchone()["c"]
+                cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE human_action IS NOT NULL;")
+                labeled = cur.fetchone()["c"]
+        reply = (
+            f"📊 *Database Status*\n"
+            f"• Total Scraped Jobs: `{total}`\n"
+            f"• Passed System-1 Triage: `{passed}`\n"
+            f"• Human Labeled (`n`): `{labeled}`"
+        )
+    elif cmd == "/eval":
+        reply = run_evaluation()
+    elif cmd == "/reset_labels":
+        reply = reset_database("labels")
+    elif cmd == "/reset_triage":
+        reply = reset_database("triage")
+    elif cmd == "/wipe_all":
+        reply = reset_database("all")
+    else:
+        return
+
+    await client.post(
+        f"{TG_BASE}/sendMessage",
+        json={"chat_id": CHAT_ID, "text": reply, "parse_mode": "Markdown"},
+    )
+
 async def listen_for_button_clicks():
-    print("🎧 Listening for Telegram button taps (Tap '✅ Apply / Tailor PDF' on your phone!)...")
+    print("🎧 Listening for Telegram button taps & /commands (/help, /status, /eval, /reset_labels)...")
     offset = 0
     async with httpx.AsyncClient(timeout=60.0) as client:
         while True:
@@ -87,6 +136,15 @@ async def listen_for_button_clicks():
                 data = resp.json()
                 for upd in data.get("result", []):
                     offset = upd["update_id"] + 1
+
+                    # 1. Check for text slash commands (/reset_labels, /eval, /status)
+                    msg_obj = upd.get("message", {})
+                    text_in = msg_obj.get("text", "")
+                    if text_in.startswith("/"):
+                        await handle_slash_command(client, text_in)
+                        continue
+
+                    # 2. Check for inline button taps
                     cb = upd.get("callback_query")
                     if not cb:
                         continue
@@ -131,7 +189,6 @@ async def listen_for_button_clicks():
                     )
                     print(f"✅ Ground-Truth Logged -> Job #{job_id}: {label}")
 
-                    # If user tapped APPLY, invoke LangGraph Surgical Tailor + Typst PDF compiler!
                     if kind == "act" and label == "APPLIED" and job_row:
                         print(f"⚙️ Running LangGraph Surgical Tailor + Typst PDF for [{job_row['company']}]...")
                         await client.post(
