@@ -9,6 +9,9 @@ from dotenv import load_dotenv, set_key
 from evals.evaluate_triage import run_evaluation
 from src.db import get_connection, init_db, reset_database, get_pool, close_pool
 from src.db_migrate import pending_migrations
+from src.knowledge.store import hydrate, flush, get_store
+from src.knowledge.export import export_bundle
+from src.knowledge.distiller import run_distill
 from src.settings_store import EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH, sync_local_to_db
 from src.httpx_utils import get_with_retry
 
@@ -154,5 +157,46 @@ if __name__ == "__main__":
 
         from src.main_loop import main as run_loop
         asyncio.run(run_loop())
+    elif cmd == "distill":
+        init_db()
+        hydrate()
+        run_distill()
+        flush()
+        print("✅ Distill complete")
+    elif cmd == "knowledge":
+        sub = sys.argv[2].lower() if len(sys.argv) > 2 else "help"
+        init_db()
+        if sub == "export":
+            out = sys.argv[3] if len(sys.argv) > 3 else "knowledge_export"
+            hydrate()
+            export_bundle(out, redact="--redact" in sys.argv)
+            print(f"✅ Exported to {out}")
+        elif sub == "check":
+            hydrate()
+            store = get_store()
+            bad = [p for p, c in store.concepts.items() if not c.concept_type]
+            if bad:
+                print("❌ Missing type:", bad)
+                sys.exit(1)
+            print(f"✅ Knowledge check passed ({len(store.concepts)} concepts)")
+        elif sub == "flush":
+            hydrate()
+            flush()
+            print("✅ Flushed")
+        elif sub == "forget":
+            pattern = sys.argv[3] if len(sys.argv) > 3 else ""
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO knowledge_forget (pattern) VALUES (%s) ON CONFLICT DO NOTHING;", (pattern,))
+                conn.commit()
+            hydrate()
+            store = get_store()
+            for path in list(store.concepts):
+                if pattern.lower() in path.lower():
+                    store.delete(path)
+            flush()
+            print(f"✅ Forgot {pattern}")
+        else:
+            print("Usage: manage.py knowledge [export|check|flush|forget]")
     else:
         print_help()

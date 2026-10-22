@@ -150,6 +150,12 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
 async def tailor_resume_for_job(job: dict, custom_instruction: str = "") -> dict:
     """Runs System-2 Surgical Tailoring (OpenAI Direct or OpenRouter) + Jev Hallucination Audit + Typst PDF."""
     PROFILE = get_master_profile()
+    try:
+        from src.knowledge.store import get_store
+        kc = get_store().search("resume win", type=None)[:3]
+        learned = "\\n".join(c.body for c in kc)
+    except Exception:
+        learned = ""
     if OPENAI_API_KEY:
         llm_url = "https://api.openai.com/v1/chat/completions"
         llm_key = OPENAI_API_KEY
@@ -176,6 +182,9 @@ Job Description:
 {(job.get('jd_text') or '')[:3500]}
 
 Additional User Instruction: {custom_instruction or 'None'}
+
+Learned Knowledge Context:
+{learned}
 
 Return ONLY valid JSON matching this schema:
 {{

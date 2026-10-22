@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from src.db import get_connection
 from src.httpx_utils import post_with_retry
 from src.jd_parse import parse_jd
+from src.knowledge.store import get_store
 from src.notify import alert
 from src.settings_store import get_master_profile
 
@@ -75,6 +76,13 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
 
     PROFILE = get_master_profile()
 
+    try:
+        store = get_store()
+        learned = store.search("scam", type="Scam Pattern")[:5]
+        learned_context = "\\n".join(c.body for c in learned)
+    except Exception:
+        learned_context = ""
+
     payload = {
         "model": model_id,
         "state": {
@@ -88,6 +96,7 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
                 "location": job["location"],
                 "description": _build_jd_description(job, PROFILE),
             },
+            "learned_context": learned_context,
         },
         "questions": {
             "scam_or_harvester": {

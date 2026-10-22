@@ -34,6 +34,8 @@ async def scheduled_pipeline_worker():
 
 async def main():
     init_db()
+    from src.knowledge.store import hydrate
+    hydrate()
     await asyncio.gather(
         scheduled_pipeline_worker(),
         listen_for_button_clicks(),
