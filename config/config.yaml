@@ -52,3 +52,7 @@ ats_targets:
       tenant: "adobe"
       wd_instance: "wd5"
       site: "external_experienced"
+  # smartrecruiters: ["company-slug"]
+  smartrecruiters: []
+  # recruitee: ["company-slug"]
+  recruitee: []

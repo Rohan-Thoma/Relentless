@@ -73,6 +73,7 @@ async def test_poll_ashby_flow(monkeypatch):
 async def test_poll_workday_flow(monkeypatch):
     monkeypatch.setattr("src.ingestors.ats_poller.insert_job", lambda *a, **k: True)
     monkeypatch.setattr("src.ingestors.ats_poller.job_exists", lambda *a, **k: False)
+    monkeypatch.setattr("src.ingestors.ats_poller.is_near_dup", lambda *a, **k: False)
     list_data = json.loads((FIX / "workday_list.json").read_text())
     detail_data = json.loads((FIX / "workday_detail.json").read_text())
     cfg = {"company": "NVIDIA", "tenant": "nvidia", "wd_instance": "wd5", "site": "NVIDIAExternalCareerSite"}

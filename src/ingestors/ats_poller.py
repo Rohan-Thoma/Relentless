@@ -5,6 +5,7 @@ import yaml
 from bs4 import BeautifulSoup
 
 from src.db import get_connection, make_dedup_hash
+from src.dedupe import normalize_title, is_near_dup
 from src.httpx_utils import get_with_retry, post_with_retry
 
 with open("config/config.yaml", "r") as f:
@@ -36,15 +37,18 @@ def job_exists(conn, dedup_hash: str) -> bool:
 
 def insert_job(conn, source_ats: str, company: str, title: str, location: str, apply_url: str, jd_text: str) -> bool:
     dedup_hash = make_dedup_hash(company, title, location)
+    if is_near_dup(conn, company, title):
+        return False
+    canonical = normalize_title(title)
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO jobs (dedup_hash, source_ats, company, title, location, apply_url, jd_text)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO jobs (dedup_hash, source_ats, company, title, location, apply_url, jd_text, canonical_title)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (dedup_hash) DO NOTHING
             RETURNING id;
             """,
-            (dedup_hash, source_ats, company, title, location, apply_url, jd_text),
+            (dedup_hash, source_ats, company, title, location, apply_url, jd_text, canonical),
         )
         inserted = cur.fetchone() is not None
     conn.commit()
@@ -119,7 +123,7 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
             continue
 
         # Check dedup BEFORE firing a second HTTP request for full JD
-        if job_exists(conn, make_dedup_hash(company, title, loc)):
+        if job_exists(conn, make_dedup_hash(company, title, loc)) or is_near_dup(conn, company, title):
             continue
 
         detail_resp = await get_with_retry(client, f"{base}{ext_path}", headers={"Accept": "application/json"})
@@ -130,6 +134,40 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
             if insert_job(conn, "workday", company, title, loc, apply_url, jd):
                 added += 1
     return added
+
+async def poll_smartrecruiters(client: httpx.AsyncClient, conn, company: str) -> int:
+    url = f"https://api.smartrecruiters.com/v1/companies/{company}/postings"
+    resp = await get_with_retry(client, url)
+    if resp.status_code != 200:
+        return 0
+    added = 0
+    for job in resp.json().get("content", []):
+        title = job.get("name", "")
+        loc = job.get("location", {}).get("city", "") if isinstance(job.get("location"), dict) else ""
+        if matches_basic_filters(title, loc):
+            jd = job.get("jobAd", {}).get("sections", {}).get("jobDescription", {}).get("text", "") if isinstance(job.get("jobAd"), dict) else ""
+            apply_url = job.get("applyUrl", "")
+            if insert_job(conn, "smartrecruiters", company, title, loc, apply_url, clean_html(jd)):
+                added += 1
+    return added
+
+
+async def poll_recruitee(client: httpx.AsyncClient, conn, company: str) -> int:
+    url = f"https://{company}.recruitee.com/api/offers/"
+    resp = await get_with_retry(client, url)
+    if resp.status_code != 200:
+        return 0
+    added = 0
+    for job in resp.json().get("offers", []):
+        title = job.get("title", "")
+        loc = job.get("location", "")
+        if matches_basic_filters(title, loc):
+            jd = job.get("description", "")
+            apply_url = job.get("careers_url", "") or job.get("url", "")
+            if insert_job(conn, "recruitee", company, title, loc, apply_url, clean_html(jd)):
+                added += 1
+    return added
+
 
 async def run_ingestion():
     targets = CONFIG["ats_targets"]
@@ -156,6 +194,16 @@ async def run_ingestion():
             for w in targets.get("workday_cxs", []):
                 n = await poll_workday(client, conn, w)
                 print(f"  [Workday]    {w['company']}: +{n} new matching jobs")
+                total_new += n
+
+            for s in targets.get("smartrecruiters", []):
+                n = await poll_smartrecruiters(client, conn, s)
+                print(f"  [SmartRecruiters] {s}: +{n} new matching jobs")
+                total_new += n
+
+            for r in targets.get("recruitee", []):
+                n = await poll_recruitee(client, conn, r)
+                print(f"  [Recruitee]  {r}: +{n} new matching jobs")
                 total_new += n
 
     print(f"\n🚀 Ingestion complete! {total_new} brand-new jobs saved to Neon PostgreSQL.")

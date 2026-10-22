@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from src.db import get_connection
 from src.httpx_utils import post_with_retry
+from src.jd_parse import parse_jd
 from src.notify import alert
 from src.settings_store import get_master_profile
 
@@ -19,6 +20,22 @@ TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 logger = logging.getLogger(__name__)
+
+
+def _build_jd_description(job: dict, profile: dict) -> str:
+    jd_text = job.get("jd_text") or ""
+    structured = parse_jd(jd_text, profile)
+    parts = []
+    if structured.get("salary_mentions"):
+        parts.append("Compensation: " + ", ".join(structured["salary_mentions"]))
+    if structured.get("skills"):
+        parts.append("Skills: " + ", ".join(structured["skills"][:25]))
+    if structured.get("requirements"):
+        parts.append("Requirements: " + structured["requirements"][:1500])
+    if structured.get("responsibilities"):
+        parts.append("Responsibilities: " + structured["responsibilities"][:1500])
+    summary = "\\n".join(parts)
+    return (summary + "\\n\\n" + jd_text[:6000]).strip()
 
 SCORE_TIER_LABELS = ["reject", "weak_fit", "moderate_fit", "strong_fit", "dream_role"]
 
@@ -69,7 +86,7 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
                 "company": job["company"],
                 "title": job["title"],
                 "location": job["location"],
-                "description": (job["jd_text"] or "")[:4500],
+                "description": _build_jd_description(job, PROFILE),
             },
         },
         "questions": {
