@@ -21,8 +21,8 @@ async def scheduled_pipeline_worker():
             await run_triage(batch_limit=30)
             await send_pending_digests(limit=5)
             try:
-                from src.apply.runner import auto_apply_cycle
-                await auto_apply_cycle()
+                from src.apply.runner import prepare_apply_cycle
+                await prepare_apply_cycle()
             except Exception as e:
                 logger.error("Auto apply cycle error: %s", e)
                 alert(f"⚠️ Auto apply cycle error: {e}")

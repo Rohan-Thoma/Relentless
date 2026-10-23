@@ -4,6 +4,7 @@ pyyaml
 python-dotenv
 pydantic
 psycopg[binary]
+psycopg-pool
 pgvector
 beautifulsoup4
 langgraph

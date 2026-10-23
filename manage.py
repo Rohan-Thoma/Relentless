@@ -111,6 +111,14 @@ def run_doctor():
     except Exception as e:
         print(f"  ⚠️ Retry helper smoke: {e}")
 
+    # Profile readiness
+    try:
+        from src.settings_store import load_master_profile
+
+        load_master_profile()
+        print("  ✅ Master profile: configured")
+    except Exception as e:
+        print(f"  ❌ Master profile: {e}")
     print(f"  ✅ Private Cloud Profile Synced: {'Yes (Railway-ready!)' if has_cloud_profile else 'No (Run: python manage.py sync)'}")
     print(f"  ✅ Local master_profile.json gitignored: {os.path.exists(LOCAL_PROFILE_PATH)}")
     print(f"  ✅ OpenRouter Key Set: {bool(os.getenv('OPENROUTER_API_KEY'))}")
@@ -169,7 +177,7 @@ if __name__ == "__main__":
         if sub == "export":
             out = sys.argv[3] if len(sys.argv) > 3 else "knowledge_export"
             hydrate()
-            export_bundle(out, redact="--redact" in sys.argv)
+            export_bundle(out, redact="--redact" in sys.argv, force="--force" in sys.argv)
             print(f"✅ Exported to {out}")
         elif sub == "check":
             hydrate()

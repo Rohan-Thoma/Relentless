@@ -8,6 +8,10 @@ from psycopg.types.json import Jsonb
 from src.db import get_connection
 
 LOCAL_PROFILE_PATH = "config/master_profile.json"
+
+
+class ProfileNotConfigured(Exception):
+    """Raised when no master profile is available (neither local file nor DB)."""
 EXAMPLE_PROFILE_PATH = "config/master_profile.example.json"
 LOCAL_CONFIG_PATH = "config/config.yaml"
 
@@ -70,6 +74,10 @@ def _invalidate_profile_cache():
     _profile_cache["ts"] = 0.0
 
 
+def _allow_example_profile() -> bool:
+    return os.getenv("ALLOW_EXAMPLE_PROFILE", "").strip().lower() in ("1", "true", "yes")
+
+
 def load_master_profile() -> dict:
     if os.path.exists(LOCAL_PROFILE_PATH):
         with open(LOCAL_PROFILE_PATH, "r", encoding="utf-8") as f:
@@ -84,8 +92,14 @@ def load_master_profile() -> dict:
     except Exception:
         pass
 
-    with open(EXAMPLE_PROFILE_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if _allow_example_profile() and os.path.exists(EXAMPLE_PROFILE_PATH):
+        with open(EXAMPLE_PROFILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    raise ProfileNotConfigured(
+        "Master profile is not configured. Run 'python manage.py sync' after creating "
+        "config/master_profile.json, or set ALLOW_EXAMPLE_PROFILE=1 for demo/test use."
+    )
 
 
 def get_master_profile() -> dict:

@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+config/master_profile.json
+output/
+knowledge/
+agent_scratch_pad/
+.git/
+node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+tests/
+*.pdf
+*.typ

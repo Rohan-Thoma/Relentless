@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Mock ATS Application Form</title>
+</head>
+<body>
+  <h1>Apply for Software Engineer</h1>
+  <form id="applyForm" action="/submit" method="post" enctype="multipart/form-data">
+    <label>Full Name <input type="text" name="full_name" required /></label><br/>
+    <label>Email <input type="email" name="email" required /></label><br/>
+    <label>Resume (PDF) <input type="file" name="resume" accept="application/pdf" required /></label><br/>
+    <label>Cover Letter <textarea name="cover_letter"></textarea></label><br/>
+    <button type="submit">Submit Application</button>
+  </form>
+  <div id="confirmation" style="display:none;">
+    <h2>Thank you! Your application has been received.</h2>
+    <p>Confirmation ID: ABC-123</p>
+  </div>
+  <script>
+    document.getElementById('applyForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.getElementById('applyForm').style.display = 'none';
+      document.getElementById('confirmation').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

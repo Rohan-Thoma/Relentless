@@ -5,7 +5,8 @@ import httpx
 from dotenv import load_dotenv
 
 from evals.evaluate_triage import run_evaluation
-from src.db import get_connection, reset_database
+from src.db import get_connection, reset_database, consume_pending_action, delete_pending_action
+from src.hitl.auth import is_authorized, update_chat_id
 from src.orchestrator.graph import RELENTLESS_GRAPH
 from datetime import UTC
 
@@ -27,7 +28,7 @@ def build_inline_keyboard(job_id: int) -> dict:
                 {"text": "⭐ Got Callback!", "callback_data": f"out:CALLBACK:{job_id}"},
             ],
             [
-                {"text": "🤖 Auto Apply", "callback_data": f"apply:auto:{job_id}"},
+                {"text": "🛠️ Prepare Application", "callback_data": f"prepare:{job_id}"},
             ],
         ]
     }
@@ -83,7 +84,9 @@ async def send_pending_digests(limit: int = 5):
                 print(f"📲 Sent Telegram card for [{j['company']}] {j['title']} (Job #{j['id']})")
             await asyncio.sleep(0.4)
 
-async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str):
+async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str, chat_id=None):
+    if chat_id is None:
+        chat_id = CHAT_ID
     """Handles remote management and reset commands sent directly from your Telegram phone chat."""
     cmd = cmd_text.strip().split()[0].lower()
 
@@ -116,12 +119,35 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str):
         )
     elif cmd == "/eval":
         reply = run_evaluation()
-    elif cmd == "/reset_labels":
-        reply = reset_database("labels")
-    elif cmd == "/reset_triage":
-        reply = reset_database("triage")
-    elif cmd == "/wipe_all":
-        reply = reset_database("all")
+    elif cmd in ("/reset_labels", "/reset_triage", "/wipe_all"):
+        mode_map = {"/reset_labels": "labels", "/reset_triage": "triage", "/wipe_all": "all"}
+        mode = mode_map[cmd]
+        from src.db import create_pending_action
+
+        raw_token, _expires = create_pending_action(
+            "DESTRUCTIVE", {"mode": mode, "chat_id": int(chat_id) if chat_id else None}, ttl_seconds=600
+        )
+        confirm_text = (
+            f"⚠️ Confirm destructive action: `{cmd}` (mode={mode})?\\n"
+            "This cannot be undone. Expires in 10 minutes."
+        )
+        await client.post(
+            f"{TG_BASE}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": confirm_text,
+                "parse_mode": "Markdown",
+                "reply_markup": {
+                    "inline_keyboard": [
+                        [
+                            {"text": "✅ Confirm", "callback_data": f"confirm:{raw_token}"},
+                            {"text": "❌ Cancel", "callback_data": f"cancel:{raw_token}"},
+                        ]
+                    ]
+                },
+            },
+        )
+        return
     elif cmd == "/stop_apply":
         from psycopg.types.json import Jsonb
         from datetime import datetime, timedelta
@@ -152,6 +178,8 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str):
     )
 
 async def listen_for_button_clicks():
+    if not CHAT_ID:
+        raise ValueError("TELEGRAM_CHAT_ID is required to run the Telegram listener")
     print("🎧 Listening for Telegram button taps & /commands (/help, /status, /eval, /reset_labels)...")
     offset = 0
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -162,12 +190,84 @@ async def listen_for_button_clicks():
                 for upd in data.get("result", []):
                     offset = upd["update_id"] + 1
 
-                    # 1. Check for text slash commands (/reset_labels, /eval, /status)
-                    msg_obj = upd.get("message", {})
-                    text_in = msg_obj.get("text", "")
-                    if text_in.startswith("/"):
-                        await handle_slash_command(client, text_in)
+                    # Authorization: reject any update not from the configured chat.
+                    if not is_authorized(upd):
+                        # answer callback if present, generically
+                        cb = upd.get("callback_query")
+                        if cb:
+                            try:
+                                await client.post(
+                                    f"{TG_BASE}/answerCallbackQuery",
+                                    json={"callback_query_id": cb["id"], "text": "Not authorized"},
+                                )
+                            except Exception:
+                                pass
                         continue
+
+                    msg_obj = upd.get("message", {})
+                    chat_id = update_chat_id(upd)
+
+                    # 1. Check for text slash commands
+                    text_in = msg_obj.get("text", "") if isinstance(msg_obj, dict) else ""
+                    if isinstance(text_in, str) and text_in.startswith("/"):
+                        await handle_slash_command(client, text_in, chat_id=chat_id)
+                        continue
+                    # Handle edit-instruction messages: "#123 <note>"
+                    if isinstance(text_in, str) and text_in.strip().startswith("#"):
+                        import re as _re
+
+                        m = _re.match(r"^#(\d+)\s*(.*)$", text_in.strip(), _re.DOTALL)
+                        if m:
+                            jid = int(m.group(1))
+                            note = m.group(2).strip()
+                            with get_connection() as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute("SELECT id, company, title, jd_text, jev_persona, apply_url FROM jobs WHERE id = %s;", (jid,))
+                                    jr = cur.fetchone()
+                            if jr:
+                                await client.post(
+                                    f"{TG_BASE}/sendMessage",
+                                    json={
+                                        "chat_id": chat_id or CHAT_ID,
+                                        "text": f"✅ Job #{jid}: received modification instructions. I'll get back to you with an updated PDF.",
+                                    },
+                                )
+
+                                async def _edit_task(jobr, n):
+                                    try:
+                                        thread_cfg = {"configurable": {"thread_id": f"job_{jobr['id']}"}}
+                                        final_state = await RELENTLESS_GRAPH.ainvoke(
+                                            {
+                                                "job_id": jobr["id"],
+                                                "company": jobr["company"],
+                                                "title": jobr["title"],
+                                                "jd_text": jobr["jd_text"] or "",
+                                                "jev_persona": jobr["jev_persona"] or "ai_agent_engineer",
+                                                "human_decision": "APPLIED",
+                                                "custom_edit_note": n,
+                                                "tailored_diff": None,
+                                                "pdf_path": None,
+                                            },
+                                            config=thread_cfg,
+                                        )
+                                        pdf_path = final_state["pdf_path"]
+                                        caption = f"Job #{jobr['id']}: {final_state['tailored_diff']}\n\n🔗 Apply Here: {jobr['apply_url']}"
+                                        async with httpx.AsyncClient(timeout=60.0) as c:
+                                            with open(pdf_path, "rb") as pdf_file:
+                                                await c.post(
+                                                    f"{TG_BASE}/sendDocument",
+                                                    data={"chat_id": CHAT_ID, "caption": caption[:1000]},
+                                                    files={"document": (os.path.basename(pdf_path), pdf_file, "application/pdf")},
+                                                )
+                                    except Exception as e:
+                                        async with httpx.AsyncClient(timeout=30.0) as c:
+                                            await c.post(
+                                                f"{TG_BASE}/sendMessage",
+                                                json={"chat_id": CHAT_ID, "text": f"⚠️ Job #{jobr['id']}: edit failed: {e}"},
+                                            )
+
+                                asyncio.create_task(_edit_task(jr, note))
+                                continue
 
                     # 2. Check for inline button taps
                     cb = upd.get("callback_query")
@@ -176,6 +276,113 @@ async def listen_for_button_clicks():
 
                     cb_id = cb["id"]
                     payload = cb.get("data", "")
+
+                    # Handle confirmation/cancel callbacks
+                    if payload.startswith(("confirm:", "cancel:")):
+                        token = payload.split(":", 1)[1]
+                        if payload.startswith("cancel:"):
+                            delete_pending_action(token)
+                            await client.post(
+                                f"{TG_BASE}/answerCallbackQuery",
+                                json={"callback_query_id": cb_id, "text": "Cancelled"},
+                            )
+                            continue
+                        row = consume_pending_action(token, kind="DESTRUCTIVE")
+                        if not row:
+                            await client.post(
+                                f"{TG_BASE}/answerCallbackQuery",
+                                json={"callback_query_id": cb_id, "text": "Invalid/expired token"},
+                            )
+                            continue
+                        payload_data = row["payload"] or {}
+                        if payload_data.get("chat_id") is not None and int(payload_data["chat_id"]) != int(chat_id):
+                            await client.post(
+                                f"{TG_BASE}/answerCallbackQuery",
+                                json={"callback_query_id": cb_id, "text": "Foreign token"},
+                            )
+                            continue
+                        mode = payload_data.get("mode", "labels")
+                        mode_to_reset = {"labels": "labels", "triage": "triage", "all": "all"}[mode]
+                        msg = reset_database(mode_to_reset)
+                        await client.post(
+                            f"{TG_BASE}/sendMessage",
+                            json={"chat_id": chat_id or CHAT_ID, "text": msg},
+                        )
+                        await client.post(
+                            f"{TG_BASE}/answerCallbackQuery",
+                            json={"callback_query_id": cb_id, "text": "Done"},
+                        )
+                        continue
+
+                    # Handle prepare callback (2 parts)
+                    if payload.startswith("prepare:"):
+                        try:
+                            job_id = int(payload.split(":", 1)[1])
+                        except ValueError:
+                            await client.post(f"{TG_BASE}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Bad id"})
+                            continue
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT id, company, title, apply_url, jev_fit_prob, jev_fit_tier, jev_persona, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;", (job_id,))
+                                job_row = cur.fetchone()
+                        if job_row:
+                            from src.apply.runner import prepare_application
+
+                            job_dict = dict(job_row)
+                            res = await prepare_application(job_dict)
+                            feasible = res.get("feasible", False)
+                            status = res.get("status")
+                            # send review card
+                            msg = (
+                                f"📋 Job #{job_row['id']}: Prepared for {job_row['company']} — {job_row['title']}\\n"
+                                f"Status: {status}\\n"
+                                f"Feasible: {feasible}\\n"
+                                f"URL: {job_row['apply_url']}"
+                            )
+                            buttons = []
+                            if feasible and status in ("PREPARED", "DRY_RUN"):
+                                # create submit confirmation token
+                                from src.db import create_apply_confirmation
+
+                                raw_token, _ = create_apply_confirmation(
+                                    job_id, kind="SUBMIT",
+                                    payload={"pdf_sha256": job_row.get("tailored_pdf_sha256"), "apply_url": job_row["apply_url"]},
+                                    ttl_seconds=600, created_by=str(chat_id),
+                                )
+                                buttons.append([{"text": "✅ Submit application", "callback_data": f"submit:{job_id}:{raw_token}"}])
+                            buttons.append([{"text": "✏️ Edit / re-tailor", "callback_data": f"act:APPLIED:{job_id}"}])
+                            buttons.append([{"text": "❌ Cancel", "callback_data": f"cancel_prepare:{job_id}"}])
+                            await client.post(
+                                f"{TG_BASE}/sendMessage",
+                                json={"chat_id": chat_id or CHAT_ID, "text": msg, "reply_markup": {"inline_keyboard": buttons}},
+                            )
+                        await client.post(f"{TG_BASE}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Prepared"})
+                        continue
+
+                    # Handle submit callback (3 parts: submit:job_id:token)
+                    if payload.startswith("submit:"):
+                        parts = payload.split(":", 2)
+                        if len(parts) != 3:
+                            await client.post(f"{TG_BASE}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Bad payload"})
+                            continue
+                        job_id = int(parts[1])
+                        token = parts[2]
+                        with get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT id, company, title, apply_url, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;", (job_id,))
+                                job_row = cur.fetchone()
+                        if job_row:
+                            from src.apply.runner import submit_application
+
+                            job_dict = dict(job_row)
+                            res = await submit_application(job_dict, token)
+                            await client.post(
+                                f"{TG_BASE}/sendMessage",
+                                json={"chat_id": chat_id or CHAT_ID, "text": f"Submit result for {job_row['company']}: {res.get('status')} {res.get('error') or ''}"},
+                            )
+                        await client.post(f"{TG_BASE}/answerCallbackQuery", json={"callback_query_id": cb_id, "text": "Done"})
+                        continue
+
                     parts = payload.split(":")
                     if len(parts) != 3:
                         continue
@@ -237,35 +444,46 @@ async def listen_for_button_clicks():
                             f"{TG_BASE}/sendMessage",
                             json={
                                 "chat_id": CHAT_ID,
-                                "text": f"⏳ Tailoring resume & compiling Typst PDF for *{job_row['company']}*...",
+                                "text": f"⏳ Job #{job_row['id']}: tailoring resume & compiling PDF for *{job_row['company']}*... I'll send the result when done.",
                                 "parse_mode": "Markdown",
                             },
                         )
-                        thread_cfg = {"configurable": {"thread_id": f"job_{job_id}"}}
-                        final_state = await RELENTLESS_GRAPH.ainvoke(
-                            {
-                                "job_id": job_row["id"],
-                                "company": job_row["company"],
-                                "title": job_row["title"],
-                                "jd_text": job_row["jd_text"] or "",
-                                "jev_persona": job_row["jev_persona"] or "ai_agent_engineer",
-                                "human_decision": "APPLIED",
-                                "custom_edit_note": "",
-                                "tailored_diff": None,
-                                "pdf_path": None,
-                            },
-                            config=thread_cfg,
-                        )
 
-                        pdf_path = final_state["pdf_path"]
-                        caption = f"{final_state['tailored_diff']}\n\n🔗 Apply Here: {job_row['apply_url']}"
-                        with open(pdf_path, "rb") as pdf_file:
-                            await client.post(
-                                f"{TG_BASE}/sendDocument",
-                                data={"chat_id": CHAT_ID, "caption": caption[:1000]},
-                                files={"document": (os.path.basename(pdf_path), pdf_file, "application/pdf")},
-                            )
-                        print(f"📄 Delivered tailored PDF to Telegram: {pdf_path}")
+                        async def _tailor_task(jr, note=""):
+                            try:
+                                thread_cfg = {"configurable": {"thread_id": f"job_{jr['id']}"}}
+                                final_state = await RELENTLESS_GRAPH.ainvoke(
+                                    {
+                                        "job_id": jr["id"],
+                                        "company": jr["company"],
+                                        "title": jr["title"],
+                                        "jd_text": jr["jd_text"] or "",
+                                        "jev_persona": jr["jev_persona"] or "ai_agent_engineer",
+                                        "human_decision": "APPLIED",
+                                        "custom_edit_note": note,
+                                        "tailored_diff": None,
+                                        "pdf_path": None,
+                                    },
+                                    config=thread_cfg,
+                                )
+                                pdf_path = final_state["pdf_path"]
+                                caption = f"Job #{jr['id']}: {final_state['tailored_diff']}\n\n🔗 Apply Here: {jr['apply_url']}"
+                                async with httpx.AsyncClient(timeout=60.0) as c:
+                                    with open(pdf_path, "rb") as pdf_file:
+                                        await c.post(
+                                            f"{TG_BASE}/sendDocument",
+                                            data={"chat_id": CHAT_ID, "caption": caption[:1000]},
+                                            files={"document": (os.path.basename(pdf_path), pdf_file, "application/pdf")},
+                                        )
+                                print(f"📄 Delivered tailored PDF to Telegram: {pdf_path}")
+                            except Exception as e:
+                                async with httpx.AsyncClient(timeout=30.0) as c:
+                                    await c.post(
+                                        f"{TG_BASE}/sendMessage",
+                                        json={"chat_id": CHAT_ID, "text": f"⚠️ Job #{jr['id']}: tailoring failed: {e}"},
+                                    )
+
+                        asyncio.create_task(_tailor_task(job_row))
 
             except asyncio.CancelledError:
                 break

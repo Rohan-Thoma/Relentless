@@ -9,3 +9,4 @@ output/apply_evidence/
 .DS_Store
 .neon
 node_modules/
+agent_scratch_pad/

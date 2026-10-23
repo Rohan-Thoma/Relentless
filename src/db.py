@@ -1,8 +1,11 @@
 import hashlib
 import os
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 load_dotenv()
@@ -130,6 +133,128 @@ def reset_database(mode: str = "labels") -> str:
         conn.commit()
     print(msg)
     return msg
+
+
+def _hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def create_pending_action(kind: str, payload=None, ttl_seconds: int = 600, created_by=None):
+    """Create a single-use, expiring pending action. Returns (raw_token, expires_at)."""
+    raw = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw)
+    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO pending_actions (token, kind, payload, expires_at) VALUES (%s, %s, %s, %s);",
+                (token_hash, kind, Jsonb(payload or {}), expires_at),
+            )
+        conn.commit()
+    return raw, expires_at
+
+
+def get_pending_action(raw_token: str):
+    """Return the pending action row if it exists and is not expired; does not consume."""
+    token_hash = _hash_token(raw_token)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT token, kind, payload, expires_at FROM pending_actions WHERE token = %s;",
+                (token_hash,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    expires = row["expires_at"]
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)
+    if expires < datetime.now(UTC):
+        return None
+    return row
+
+
+def consume_pending_action(raw_token: str, kind: str | None = None):
+    """Consume a pending action if valid and unexpired. Returns row dict or None."""
+    token_hash = _hash_token(raw_token)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT kind, payload, expires_at FROM pending_actions WHERE token = %s;",
+                (token_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if kind is not None and row["kind"] != kind:
+                return None
+            expires = row["expires_at"]
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=UTC)
+            if expires < datetime.now(UTC):
+                cur.execute("DELETE FROM pending_actions WHERE token = %s;", (token_hash,))
+                conn.commit()
+                return None
+            cur.execute("DELETE FROM pending_actions WHERE token = %s;", (token_hash,))
+            conn.commit()
+    return row
+
+
+def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload=None, ttl_seconds: int = 600, created_by: str | None = None):
+    raw = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw)
+    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO apply_confirmations (token_hash, job_id, kind, payload, created_by, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s);
+                """,
+                (token_hash, job_id, kind, Jsonb(payload or {}), created_by, expires_at),
+            )
+        conn.commit()
+    return raw, expires_at
+
+
+def consume_apply_confirmation(raw_token: str, job_id: int | None = None, kind: str | None = None):
+    token_hash = _hash_token(raw_token)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, job_id, kind, payload, expires_at, status FROM apply_confirmations WHERE token_hash = %s;",
+                (token_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row.get("status") != "PENDING":
+                return None
+            if kind is not None and row["kind"] != kind:
+                return None
+            if job_id is not None and row["job_id"] != job_id:
+                return None
+            expires = row["expires_at"]
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=UTC)
+            if expires < datetime.now(UTC):
+                cur.execute("UPDATE apply_confirmations SET status='EXPIRED' WHERE id=%s;", (row["id"],))
+                conn.commit()
+                return None
+            cur.execute(
+                "UPDATE apply_confirmations SET status='USED', used_at=NOW() WHERE id=%s;",
+                (row["id"],),
+            )
+            conn.commit()
+    return row
+
+
+def delete_pending_action(raw_token: str):
+    token_hash = _hash_token(raw_token)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_actions WHERE token = %s;", (token_hash,))
+        conn.commit()
 
 
 if __name__ == "__main__":
