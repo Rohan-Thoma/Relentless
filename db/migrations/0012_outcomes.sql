@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS outcome_events (
+    id SERIAL PRIMARY KEY,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    occurred_at TIMESTAMPTZ DEFAULT NOW(),
+    source TEXT,
+    notes TEXT
+);
+
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS kind TEXT;
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS n_positive INTEGER;
+ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS calibration_model_id INTEGER;

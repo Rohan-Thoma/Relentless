@@ -140,6 +140,47 @@ class Store:
                 return fm, body
         return {}, text
 
+    def import_markdown(self, rel_path: str):
+        full = os.path.join(KNOWLEDGE_DIR, rel_path)
+        if not os.path.exists(full):
+            return None
+        # rel_path without .md -> concept path
+        concept_path = rel_path.removesuffix(".md")
+        if concept_path in ("index", "log"):
+            return None
+        res = self._read_file(concept_path)
+        if not res:
+            return None
+        fm, body = res
+        ctype = fm.get("type", "concept")
+        c = Concept(
+            path=concept_path,
+            concept_type=ctype,
+            name=fm.get("title", fm.get("name", "")),
+            description=fm.get("description", ""),
+            resource=fm.get("resource", ""),
+            tags=list(fm.get("tags") or []),
+            frontmatter=fm,
+            verified=list(fm.get("verified") or []),
+            status=fm.get("status", "stable"),
+            stale_after=fm.get("stale_after"),
+            body=body,
+        )
+        self.upsert(c, actor="human:import")
+        return c
+
+    def sync_from_files(self):
+        if not os.path.exists(KNOWLEDGE_DIR):
+            return
+        for root, _, files in os.walk(KNOWLEDGE_DIR):
+            for fn in files:
+                if not fn.endswith(".md"):
+                    continue
+                rel = os.path.relpath(os.path.join(root, fn), KNOWLEDGE_DIR).replace("\\", "/")
+                if rel in ("index.md", "log.md"):
+                    continue
+                self.import_markdown(rel)
+
     def upsert(self, concept: Concept, actor="relentless/unknown"):
         if not concept.concept_type:
             raise ValueError("type required")

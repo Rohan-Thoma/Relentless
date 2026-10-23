@@ -171,6 +171,17 @@ if __name__ == "__main__":
         run_distill()
         flush()
         print("✅ Distill complete")
+    elif cmd == "outcome":
+        job_id = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+        kind = sys.argv[3] if len(sys.argv) > 3 else "APPLIED"
+        from src.db import get_connection
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO outcome_events (job_id, kind) VALUES (%s, %s);", (job_id, kind))
+            conn.commit()
+        print(f"✅ Recorded outcome {kind} for job {job_id}")
+        sys.exit(0)
     elif cmd == "knowledge":
         sub = sys.argv[2].lower() if len(sys.argv) > 2 else "help"
         init_db()
@@ -179,6 +190,27 @@ if __name__ == "__main__":
             hydrate()
             export_bundle(out, redact="--redact" in sys.argv, force="--force" in sys.argv)
             print(f"✅ Exported to {out}")
+        elif sub == "sync":
+            direction = sys.argv[3].lower() if len(sys.argv) > 3 else "--from-files"
+            hydrate()
+            store = get_store()
+            if direction == "--from-files":
+                store.sync_from_files()
+                flush()
+                print("✅ Synced Markdown -> DB")
+            elif direction == "--to-files":
+                hydrate()
+                print("✅ Synced DB -> Markdown (via hydrate)")
+            elif direction == "--check":
+                store = get_store()
+                bad = [p for p, c in store.concepts.items() if not c.concept_type]
+                if bad:
+                    print("❌ Missing type:", bad)
+                    sys.exit(1)
+                print(f"✅ Knowledge check passed ({len(store.concepts)} concepts)")
+            else:
+                print("Usage: manage.py knowledge sync [--from-files|--to-files|--check]")
+            sys.exit(0)
         elif sub == "check":
             hydrate()
             store = get_store()
