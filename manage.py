@@ -171,6 +171,18 @@ if __name__ == "__main__":
         run_distill()
         flush()
         print("✅ Distill complete")
+    elif cmd == "health":
+        from src.db import get_connection
+
+        try:
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                cur.fetchone()
+            print("✅ DB: OK")
+        except Exception as e:
+            print(f"❌ DB: {e}")
+        print("✅ Health check complete")
+        sys.exit(0)
     elif cmd == "outcome":
         job_id = int(sys.argv[2]) if len(sys.argv) > 2 else 0
         kind = sys.argv[3] if len(sys.argv) > 3 else "APPLIED"
