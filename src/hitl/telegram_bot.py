@@ -241,33 +241,57 @@ async def send_pending_digests(limit: int = 5):
 async def _process_job_interest(
     job_row: dict, chat_id: int, custom_note: str = "", is_edit: bool = False
 ):
-    """Parallel Tailor PDF + Site Feasibility Check -> Sends Review Card with Action Buttons."""
+    """Sequential Tailor PDF -> Site Feasibility Check & Screenshot Evidence -> Sends Review Card with Action Buttons."""
     job_id = job_row["id"]
     company = job_row["company"]
     title = job_row["title"]
 
     try:
-        # Run parallel tailoring & site inspection
-        async def _tailor_step():
-            return await tailor_resume_for_job(job_row, custom_instruction=custom_note)
-
-        async def _site_step():
-            return await prepare_application(job_row)
-
-        tailor_res, site_res = await asyncio.gather(_tailor_step(), _site_step(), return_exceptions=True)
-
-        if isinstance(tailor_res, Exception):
-            raise tailor_res
-
+        # Step 1: Tailor resume
+        tailor_res = await tailor_resume_for_job(job_row, custom_instruction=custom_note)
         pdf_path = tailor_res["pdf_path"]
         pdf_sha = tailor_res["pdf_sha256"]
         diff_summary = tailor_res["diff_summary"]
 
+        # Ensure job_row has the updated tailored PDF paths for site inspection
+        job_row["tailored_pdf_path"] = pdf_path
+        job_row["tailored_pdf_sha256"] = pdf_sha
+
+        # Step 2: Inspect website and prefill application using Playwright
+        try:
+            site_res = await prepare_application(job_row)
+        except Exception as e:
+            logger.error("Site preparation error: %s", e)
+            site_res = {"status": "FAILED", "error": str(e), "feasible": False, "screenshots": []}
+
         feasible = False
         blocker = "Site check in progress"
-        if not isinstance(site_res, Exception) and isinstance(site_res, dict):
+        screenshots = []
+        if isinstance(site_res, dict):
             feasible = site_res.get("feasible", False)
             blocker = site_res.get("error") or ("Direct form ready" if feasible else "Blocked")
+            screenshots = site_res.get("screenshots") or []
+
+        # Send screenshot evidence if available
+        evidence_shots = [s for s in screenshots if os.path.exists(s)]
+        if evidence_shots:
+            evidence_img = evidence_shots[-1]
+            try:
+                with open(evidence_img, "rb") as ef:
+                    shot_cap = (
+                        f"📸 *Form Preview — Job #{job_id} ({company})*\n"
+                        f"🟢 *Status:* Application form detected & pre-filled! Ready for 1-tap auto-submit below."
+                        if feasible
+                        else f"📸 *Form Inspection Evidence — Job #{job_id} ({company})*\n🟡 *Status:* Auto-submit blocked: {blocker}"
+                    )
+                    async with httpx.AsyncClient(timeout=60.0) as cl:
+                        await cl.post(
+                            f"{TG_BASE}/sendPhoto",
+                            data={"chat_id": chat_id, "caption": shot_cap[:1024], "parse_mode": "Markdown"},
+                            files={"photo": (os.path.basename(evidence_img), ef, "image/png")},
+                        )
+            except Exception as se:
+                logger.warning("Could not send evidence screenshot: %s", se)
 
         site_status_line = (
             "🟢 *Website Check: Direct application form detected & pre-filled! Ready for 1-tap auto-submit.*"
@@ -566,7 +590,7 @@ async def _listen_loop():
                                 with get_connection() as conn:
                                     with conn.cursor() as cur:
                                         cur.execute(
-                                            "SELECT id, company, title, jd_text, jev_persona, apply_url, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;",
+                                            "SELECT * FROM jobs WHERE id = %s;",
                                             (resolved_jid,),
                                         )
                                         jr = cur.fetchone()
@@ -668,7 +692,7 @@ async def _listen_loop():
                                         human_action_at = NOW(),
                                         workflow_stage = 'PROCESSING'
                                     WHERE id = %s
-                                    RETURNING id, company, title, jd_text, jev_persona, apply_url, tailored_pdf_path, tailored_pdf_sha256;
+                                    RETURNING *;
                                     """,
                                     (job_id,),
                                 )
@@ -772,7 +796,7 @@ async def _listen_loop():
                         token = parts[2]
                         with get_connection() as conn, conn.cursor() as cur:
                             cur.execute(
-                                "SELECT id, company, title, apply_url, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;",
+                                "SELECT * FROM jobs WHERE id = %s;",
                                 (job_id,),
                             )
                             job_row = cur.fetchone()
@@ -790,6 +814,22 @@ async def _listen_loop():
                                 f"{TG_BASE}/sendMessage",
                                 json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
                             )
+                            # Send submission proof screenshot
+                            sub_shots = [s for s in (res.get("screenshots") or []) if os.path.exists(s)]
+                            if sub_shots:
+                                try:
+                                    with open(sub_shots[-1], "rb") as ef:
+                                        await client.post(
+                                            f"{TG_BASE}/sendPhoto",
+                                            data={
+                                                "chat_id": chat_id,
+                                                "caption": f"📸 *Submission Proof — Job #{job_id} ({job_row['company']})*\nStatus: *{st}*",
+                                                "parse_mode": "Markdown",
+                                            },
+                                            files={"photo": (os.path.basename(sub_shots[-1]), ef, "image/png")},
+                                        )
+                                except Exception as se:
+                                    logger.warning("Could not send submission screenshot: %s", se)
                         await client.post(
                             f"{TG_BASE}/answerCallbackQuery",
                             json={"callback_query_id": cb_id, "text": "Submitted"},
@@ -804,7 +844,7 @@ async def _listen_loop():
                             continue
                         with get_connection() as conn, conn.cursor() as cur:
                             cur.execute(
-                                "SELECT id, company, title, apply_url, jev_fit_prob, jev_fit_tier, jev_persona, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;",
+                                "SELECT * FROM jobs WHERE id = %s;",
                                 (job_id,),
                             )
                             job_row = cur.fetchone()

@@ -165,6 +165,35 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
 {b3_typ}
 """
 
+    # Clickable hyperlinks for email, linkedin, github
+    li_url = PROFILE.get("linkedin", "")
+    if li_url:
+        li_target = li_url if li_url.startswith("http") else "https://" + li_url
+        li_elem = f'#link("{li_target}")[{escape_typst(li_url)}]'
+    else:
+        li_elem = ""
+
+    gh_url = PROFILE.get("github", "")
+    if gh_url:
+        gh_target = gh_url if gh_url.startswith("http") else "https://" + gh_url
+        gh_elem = f'#link("{gh_target}")[{escape_typst(gh_url)}]'
+    else:
+        gh_elem = ""
+
+    email = PROFILE.get("email", "")
+    email_elem = f'#link("mailto:{email}")[{escape_typst(email)}]' if email else ""
+
+    contact_parts = [escape_typst(PROFILE["location"])]
+    if PROFILE.get("phone"):
+        contact_parts.append(escape_typst(PROFILE["phone"]))
+    if email_elem:
+        contact_parts.append(email_elem)
+    if li_elem:
+        contact_parts.append(li_elem)
+    if gh_elem:
+        contact_parts.append(gh_elem)
+    contact_line = " | ".join(contact_parts)
+
     typst_source = f"""#set page(paper: "a4", margin: (x: 1.2cm, y: 1.0cm))
 #set text(size: 9.5pt)
 #set par(justify: true, leading: 0.52em)
@@ -172,7 +201,7 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
 #align(center)[
   #text(size: 15pt, weight: "bold")[{escape_typst(PROFILE['name'])}] \\
   #v(2pt)
-  #text(size: 8.5pt)[{escape_typst(PROFILE['location'])} | {escape_typst(PROFILE.get('phone', ''))} | {escape_typst(PROFILE['email'])} | {escape_typst(PROFILE.get('linkedin', ''))} | {escape_typst(PROFILE['github'])}]
+  #text(size: 8.5pt)[{contact_line}]
 ]
 
 #v(4pt)

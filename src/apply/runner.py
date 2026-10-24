@@ -4,6 +4,8 @@ import yaml
 from datetime import datetime, timedelta, UTC
 from urllib.parse import urlparse
 
+from psycopg.types.json import Jsonb
+
 from src.db import get_connection, consume_apply_confirmation
 from src.settings_store import get_master_profile
 from src.apply.detector import classify
@@ -71,10 +73,13 @@ def _guard(job, mode):
                 last = row["last"]
                 if datetime.now(UTC) - last < timedelta(hours=cooldown):
                     return False, "company cooldown"
-    if job.get("jev_fit_prob", 0) < auto.get("min_fit_prob", 0.70):
-        return False, "fit prob below threshold"
-    if job.get("jev_fit_tier") not in auto.get("allowed_tiers", []):
-        return False, "tier not allowed"
+    # If human explicitly marked interest/applied, allow review/prep regardless of raw automated thresholds
+    is_human_interest = job.get("human_action") in ("APPLIED", "INTERESTED") or job.get("workflow_stage") in ("PROCESSING", "EDITING")
+    if not is_human_interest:
+        if job.get("jev_fit_prob", 0) < auto.get("min_fit_prob", 0.70):
+            return False, "fit prob below threshold"
+        if job.get("jev_fit_tier") not in auto.get("allowed_tiers", []):
+            return False, "tier not allowed"
     return True, "ok"
 
 
@@ -97,6 +102,24 @@ def _sha256_file(path):
 
 async def prepare_application(job):
     """Prepare an application (prefill + evidence). Never submits."""
+    # Ensure complete job row is loaded from DB if partial dict provided
+    job_id = job.get("id") if isinstance(job, dict) else job
+    if job_id:
+        try:
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT * FROM jobs WHERE id = %s;", (job_id,))
+                fresh = cur.fetchone()
+                if fresh:
+                    fresh_dict = dict(fresh)
+                    # Preserve any explicitly passed in-memory paths
+                    if isinstance(job, dict):
+                        for k in ("tailored_pdf_path", "tailored_pdf_sha256", "pdf_path"):
+                            if job.get(k):
+                                fresh_dict[k] = job[k]
+                    job = fresh_dict
+        except Exception:
+            pass
+
     pdf_path = job.get("tailored_pdf_path") or job.get("pdf_path")
     pdf_sha = job.get("tailored_pdf_sha256")
     if pdf_path and os.path.exists(pdf_path) and not pdf_sha:
@@ -177,7 +200,7 @@ async def prepare_application(job):
                 INSERT INTO apply_events (job_id, attempt, router_path, mode, status, error, fields_filled, screenshots, started_at, finished_at, evidence_path)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),%s);
                 """,
-                (job["id"], 1, router_path, "PREPARE", status, error, fields_filled, screenshots, evidence_dir),
+                (job["id"], 1, router_path, "PREPARE", status, error, Jsonb(fields_filled), screenshots, evidence_dir),
             )
             cur.execute(
                 "UPDATE jobs SET apply_status=%s, apply_state=%s, apply_last_at=NOW(), tailored_pdf_path=%s, tailored_pdf_sha256=%s WHERE id=%s;",
@@ -282,7 +305,7 @@ async def submit_application(job, confirmation_token):
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),%s);
                 """,
                 (
-                    job["id"], 1, router_path, "SUBMIT", status, error, fields_filled, screenshots,
+                    job["id"], 1, router_path, "SUBMIT", status, error, Jsonb(fields_filled), screenshots,
                     row["id"], pdf_sha, None, verification, evidence_dir,
                     datetime.now(UTC) if status == "SUBMITTED" else None,
                 ),
