@@ -2,10 +2,12 @@ import os
 from typing import TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from src.db import get_connection
+from src.apply.runner import prepare_application, submit_application
 from src.tailor.resume_tailor import tailor_resume_for_job, AuditUnavailable
 
 
@@ -32,8 +34,6 @@ def _checkpointer():
     mode = os.getenv("GRAPH_CHECKPOINTER", "memory").lower()
     if mode == "postgres":
         try:
-            from langgraph.checkpoint.postgres import PostgresSaver
-
             dsn = os.getenv("LANGGRAPH_CHECKPOINT_DSN") or os.getenv("DATABASE_URL")
             saver = PostgresSaver.from_conn_string(dsn)
             saver.setup()
@@ -112,8 +112,6 @@ async def await_tailor_approval(state: JobAgentState) -> JobAgentState:
 
 
 async def prepare_application_node(state: JobAgentState) -> JobAgentState:
-    from src.apply.runner import prepare_application
-
     job = {"id": state["job_id"], "company": state.get("company"), "title": state.get("title"),
            "apply_url": None, "jev_fit_prob": 0.9, "jev_fit_tier": "strong_fit",
            "tailored_pdf_path": state.get("pdf_path"), "tailored_pdf_sha256": state.get("pdf_sha256")}
@@ -145,8 +143,6 @@ async def await_submit_confirmation(state: JobAgentState) -> JobAgentState:
 
 
 async def submit_application_node(state: JobAgentState) -> JobAgentState:
-    from src.apply.runner import submit_application
-
     token = (state.get("submit_confirmation") or {}).get("token")
     job = {"id": state["job_id"], "company": state.get("company"), "title": state.get("title"),
            "apply_url": None, "tailored_pdf_path": state.get("pdf_path"),

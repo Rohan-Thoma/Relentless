@@ -2,16 +2,13 @@ import os
 import pytest
 
 from dotenv import load_dotenv
+from src.db import get_connection, consume_apply_confirmation, create_apply_confirmation
 
 load_dotenv(override=True)
-
-from src.db import consume_apply_confirmation, create_apply_confirmation
 
 
 def _db_available():
     try:
-        from src.db import get_connection
-
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1;")
             cur.fetchone()
@@ -27,8 +24,6 @@ def test_invalid_token_rejected():
 
 @pytest.mark.skipif(not _db_available(), reason="database unavailable")
 def test_confirmation_single_use():
-    from src.db import get_connection
-
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(

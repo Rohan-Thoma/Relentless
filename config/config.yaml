@@ -1,67 +1,207 @@
+# ============================================
+# Relentless Job Search Agent - Config
+# ============================================
+# SMARTRECRUITERS: ATS with public Posting API.
+#   URL format: https://jobs.smartrecruiters.com/{slug}/... or https://careers.smartrecruiters.com/{slug}
+#   Example slugs: LinkedIn3, ServiceNow, IFS1, CheckPointSoftwareTechnologies2
+# RECRUITEE: European/startup-focused ATS.
+#   URL format: https://{slug}.recruitee.com/api/offers/
+#   Example slugs: bunq, intermategroupgmbh, aquablu, curegroupgmbh
+#
+# WHY LIMITED BEFORE: smartrecruiters and recruitee arrays were EMPTY ([]),
+# meaning this agent wasn't scanning thousands of available tech/AI employers.
+#
+# AUTOMATION EXPLANATION (current settings are NOT too relaxed — very strict):
+#   apply_mode: DRY_RUN  -> NEVER submits applications (only prepares/evaluates)
+#   daily_cap: 5          -> Max 5 SUBMITTED applications per 24 hours
+#   per_company_cooldown_hours: 72 -> 3-day gap before applying to same company again
+#   min_fit_prob: 0.70     -> Only applies if job match probability >= 70%
+#   allowed_tiers: [strong_fit, dream_role] -> Only highest-quality matches
+#   max_free_text_questions: 0 -> REJECTS any job with even 1 free-text question
+#   first_company_confirm: True -> Requires confirmation before first submit
+#
+# TO ENABLE REAL SUBMISSIONS:
+#   1. Change apply_mode to LIVE or AUTO_EASY
+#   2. Set allowed_tiers to include good_fit if desired
+#   3. Raise max_free_text_questions to 1 or 2
+#   4. Optionally lower per_company_cooldown_hours to 24 or 48
+#
+# PRESETS (see automation_presets below):
+#   safe = current strict settings (DRY_RUN, 0.70, 72h, 5/day)
+#   balanced = 0.65 prob, 48h, 3/day, allows good_fit + 1 free-text
+#   fast = 0.60 prob, 24h, 10/day, allows moderate_fit + 2 free-text
+# ============================================
+
 candidate_preferences:
   target_role_keywords:
-    - "ai"
-    - "machine learning"
-    - "ml"
-    - "llm"
-    - "genai"
-    - "agent"
-    - "python"
-    - "backend"
-    - "data"
-    - "software engineer"
+  - machine learning
+  - machine learning engineer
+  - ml engineer
+  - ai
+  - ai engineer
+  - artificial intelligence
+  - gen ai
+  - genai
+  - generative ai
+  - llm
+  - llm engineer
+  - large language model
+  - mlops
+  - mlops engineer
+  - ml ops
+  - agent
+  - multi-agent
+  - rag
+  - deep learning
+  - computer vision
+  - vision-language
+  - vlm
+  - python
+  - machine vision
+  - model deployment
+  - inference
+  - pipeline automation
   exclude_title_keywords:
-    - "staff"
-    - "principal"
-    - "director"
-    - "manager"
-    - "ios"
-    - "android"
-    - "frontend"
+  - staff
+  - principal
+  - director
+  - manager
+  - ios
+  - android
+  - frontend
   allowed_locations:
-    - "hyderabad"
-    - "india"
-    - "remote"
-    - "bengaluru"
-    - "bangalore"
-
+  - anywhere
+  - bangalore
+  - bengaluru
+  - chennai
+  - delhi
+  - global
+  - gurgaon
+  - hyderabad
+  - india
+  - kolkata
+  - mumbai
+  - noida
+  - pune
+  - remote
+  - worldwide
 ats_targets:
   greenhouse:
-    - "stripe"
-    - "postman"
-    - "razorpay"
-    - "rubrik"
-    - "databricks"
+  - airtable
+  - canva
+  - clickup
+  - databricks
+  - figma
+  - loom
+  - notion
+  - postman
+  - razorpay
+  - retool
+  - rubrik
+  - stripe
+  - vanta
   lever:
-    - "zeta"
-    - "palantir"
+  - notion
+  - palantir
+  - slack
+  - spotify
+  - zeta
   ashby:
-    - "supabase"
-    - "langfuse"
-    - "linear"
+  - anthropic
+  - huggingface
+  - langfuse
+  - linear
+  - midjourney
+  - openai
+  - stabilityai
+  - supabase
   workday_cxs:
-    - company: "NVIDIA"
-      tenant: "nvidia"
-      wd_instance: "wd5"
-      site: "NVIDIAExternalCareerSite"
-    - company: "Salesforce"
-      tenant: "salesforce"
-      wd_instance: "wd12"
-      site: "External_Career_Site"
-    - company: "Adobe"
-      tenant: "adobe"
-      wd_instance: "wd5"
-      site: "external_experienced"
-  # smartrecruiters: ["company-slug"]
-  smartrecruiters: []
-  # recruitee: ["company-slug"]
-  recruitee: []
-
+  - company: NVIDIA
+    tenant: nvidia
+    wd_instance: wd5
+    site: NVIDIAExternalCareerSite
+  - company: Salesforce
+    tenant: salesforce
+    wd_instance: wd12
+    site: External_Career_Site
+  - company: Adobe
+    tenant: adobe
+    wd_instance: wd5
+    site: external_experienced
+  smartrecruiters:
+  - LinkedIn3
+  - ServiceNow
+  - CheckPointSoftwareTechnologies2
+  - CommonSenseMachinesInc
+  - Versant3
+  - IFS1
+  - JobTeaser
+  - KanadeviaInova
+  - SmartRecruiters
+  - SAPITBusinessSysteme
+  - StarbucksAU
+  - TurnerTownsend
+  recruitee:
+  - bunq
+  - intermategroupgmbh
+  - aquablu
+  - curegroupgmbh
+  - fauve
+  - kununu
+  - greenpeace
 automation:
+  # PRESET SELECTOR: choose safe / balanced / fast
+  # This tells YOU which preset is active. The values below are what the agent reads.
+  # To switch presets: change this line, then adjust the automation values below.
+  preset: safe
   apply_mode: DRY_RUN
   daily_cap: 5
   per_company_cooldown_hours: 72
-  min_fit_prob: 0.70
-  allowed_tiers: [strong_fit, dream_role]
+  min_fit_prob: 0.7
+  allowed_tiers:
+  - strong_fit
+  - dream_role
   max_free_text_questions: 0
   first_company_confirm: true
+automation_presets:
+  description: "Select preset by setting 'preset' above to safe / balanced / fast. The values here are reference configs. Default active preset: safe."
+  safe:
+    apply_mode: DRY_RUN
+    daily_cap: 5
+    per_company_cooldown_hours: 72
+    min_fit_prob: 0.7
+    allowed_tiers:
+    - strong_fit
+    - dream_role
+    max_free_text_questions: 0
+    first_company_confirm: true
+    notes: Most restrictive. No submissions, only best tiers, 72h cooldown, 70% fit
+      threshold. Safe for evaluation.
+  balanced:
+    apply_mode: DRY_RUN
+    daily_cap: 3
+    per_company_cooldown_hours: 48
+    min_fit_prob: 0.65
+    allowed_tiers:
+    - strong_fit
+    - dream_role
+    - good_fit
+    max_free_text_questions: 1
+    first_company_confirm: true
+    notes: Relaxed. Allows good_fit tier, 48h cooldown, 65% threshold, up to 1 free-text
+      question. Good for broader scanning.
+  fast:
+    apply_mode: DRY_RUN
+    daily_cap: 10
+    per_company_cooldown_hours: 24
+    min_fit_prob: 0.6
+    allowed_tiers:
+    - strong_fit
+    - dream_role
+    - good_fit
+    - moderate_fit
+    max_free_text_questions: 2
+    first_company_confirm: false
+    notes: Aggressive scanning. Low threshold, 24h cooldown, allows moderate tiers
+      and up to 2 free-text questions. Use with caution. Toggle apply_mode to LIVE
+      for real submissions.

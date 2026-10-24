@@ -9,6 +9,7 @@ from src.settings_store import get_master_profile
 from src.apply.detector import classify
 from src.apply.autofill import fill
 from src.notify import alert
+from playwright.async_api import async_playwright
 
 CONFIG_PATH = "config/config.yaml"
 
@@ -151,8 +152,6 @@ async def prepare_application(job):
     status = "PREPARED"
     error = None
     try:
-        from playwright.async_api import async_playwright
-
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -217,8 +216,6 @@ async def submit_application(job, confirmation_token):
     verification = "unverified"
     final_url = None
     try:
-        from playwright.async_api import async_playwright
-
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()

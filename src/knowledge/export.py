@@ -4,6 +4,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import yaml
+
 from src.knowledge.store import get_store
 
 
@@ -76,8 +78,6 @@ def export_bundle(out_dir: str, redact: bool = False, force: bool = False):
                 fm = _redact_value(fm)
             with open(fp, "w", encoding="utf-8") as f:
                 f.write("---\n")
-                import yaml
-
                 f.write(yaml.safe_dump(fm, sort_keys=False, allow_unicode=True))
                 f.write("---\n\n")
                 f.write(body or "")

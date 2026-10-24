@@ -1,14 +1,12 @@
 
+from playwright.async_api import async_playwright
+
 LOGIN_MARKERS = ["password", "sign in to apply", "log in to apply", "create an account"]
 CAPTCHA_MARKERS = ["hcaptcha", "recaptcha", "turnstile", "cf-turnstile"]
 
 
 def _playwright():
-    try:
-        from playwright.async_api import async_playwright
-        return async_playwright
-    except Exception:
-        return None
+    return async_playwright
 
 
 async def classify(url: str):

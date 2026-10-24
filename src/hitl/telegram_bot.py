@@ -5,10 +5,16 @@ import httpx
 from dotenv import load_dotenv
 
 from evals.evaluate_triage import run_evaluation
-from src.db import get_connection, reset_database, consume_pending_action, delete_pending_action
+from datetime import UTC, datetime, timedelta
+from psycopg.types.json import Jsonb
+import re as _re
+import logging
+
+from src.db import get_connection, reset_database, consume_pending_action, delete_pending_action, create_pending_action, create_apply_confirmation
 from src.hitl.auth import is_authorized, update_chat_id
 from src.orchestrator.graph import RELENTLESS_GRAPH
-from datetime import UTC
+from src.apply.runner import prepare_application, submit_application, attempt_apply
+from src.notify import alert
 
 load_dotenv()
 
@@ -122,8 +128,6 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str, chat_id
     elif cmd in ("/reset_labels", "/reset_triage", "/wipe_all"):
         mode_map = {"/reset_labels": "labels", "/reset_triage": "triage", "/wipe_all": "all"}
         mode = mode_map[cmd]
-        from src.db import create_pending_action
-
         raw_token, _expires = create_pending_action(
             "DESTRUCTIVE", {"mode": mode, "chat_id": int(chat_id) if chat_id else None}, ttl_seconds=600
         )
@@ -149,8 +153,6 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str, chat_id
         )
         return
     elif cmd == "/stop_apply":
-        from psycopg.types.json import Jsonb
-        from datetime import datetime, timedelta
         until = datetime.now(UTC) + timedelta(hours=24)
         with get_connection() as conn:
             with conn.cursor() as cur:
@@ -214,8 +216,6 @@ async def listen_for_button_clicks():
                         continue
                     # Handle edit-instruction messages: "#123 <note>"
                     if isinstance(text_in, str) and text_in.strip().startswith("#"):
-                        import re as _re
-
                         m = _re.match(r"^#(\d+)\s*(.*)$", text_in.strip(), _re.DOTALL)
                         if m:
                             jid = int(m.group(1))
@@ -326,8 +326,6 @@ async def listen_for_button_clicks():
                                 cur.execute("SELECT id, company, title, apply_url, jev_fit_prob, jev_fit_tier, jev_persona, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;", (job_id,))
                                 job_row = cur.fetchone()
                         if job_row:
-                            from src.apply.runner import prepare_application
-
                             job_dict = dict(job_row)
                             res = await prepare_application(job_dict)
                             feasible = res.get("feasible", False)
@@ -342,8 +340,6 @@ async def listen_for_button_clicks():
                             buttons = []
                             if feasible and status in ("PREPARED", "DRY_RUN"):
                                 # create submit confirmation token
-                                from src.db import create_apply_confirmation
-
                                 raw_token, _ = create_apply_confirmation(
                                     job_id, kind="SUBMIT",
                                     payload={"pdf_sha256": job_row.get("tailored_pdf_sha256"), "apply_url": job_row["apply_url"]},
@@ -372,8 +368,6 @@ async def listen_for_button_clicks():
                                 cur.execute("SELECT id, company, title, apply_url, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;", (job_id,))
                                 job_row = cur.fetchone()
                         if job_row:
-                            from src.apply.runner import submit_application
-
                             job_dict = dict(job_row)
                             res = await submit_application(job_dict, token)
                             await client.post(
@@ -396,7 +390,6 @@ async def listen_for_button_clicks():
                                 cur.execute("SELECT id, company, title, apply_url, jev_fit_prob, jev_fit_tier, jev_persona FROM jobs WHERE id = %s;", (job_id,))
                                 job_row = cur.fetchone()
                         if job_row:
-                            from src.apply.runner import attempt_apply
                             job_dict = dict(job_row)
                             job_dict["pdf_path"] = None
                             res = await attempt_apply(job_dict, mode="CONFIRM")
@@ -488,9 +481,6 @@ async def listen_for_button_clicks():
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                import logging
-
-                from src.notify import alert
                 logging.getLogger(__name__).error("Loop error: %s", e)
                 alert(f"⚠️ Loop error: {e}")
                 await asyncio.sleep(3)

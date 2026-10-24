@@ -2,6 +2,7 @@
 import pytest
 
 from dotenv import load_dotenv
+from src.db import get_connection
 
 load_dotenv(override=True)
 
@@ -14,8 +15,6 @@ from src.db import (
 
 def _db_available():
     try:
-        from src.db import get_connection
-
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1;")
             cur.fetchone()

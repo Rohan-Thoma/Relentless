@@ -7,13 +7,16 @@ import httpx
 from dotenv import load_dotenv, set_key
 
 from evals.evaluate_triage import run_evaluation
+import asyncio
+
 from src.db import get_connection, init_db, reset_database, get_pool, close_pool
 from src.db_migrate import pending_migrations
 from src.knowledge.store import hydrate, flush, get_store
 from src.knowledge.export import export_bundle
 from src.knowledge.distiller import run_distill
-from src.settings_store import EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH, sync_local_to_db
+from src.settings_store import EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH, load_master_profile, sync_local_to_db
 from src.httpx_utils import get_with_retry
+from src.main_loop import main as run_loop
 
 ENV_FILE = ".env"
 
@@ -99,8 +102,6 @@ def run_doctor():
         print(f"  ❌ Migrations: {e}")
 
     try:
-        import asyncio
-
         async def _smoke():
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await get_with_retry(client, "https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true")
@@ -113,8 +114,6 @@ def run_doctor():
 
     # Profile readiness
     try:
-        from src.settings_store import load_master_profile
-
         load_master_profile()
         print("  ✅ Master profile: configured")
     except Exception as e:
@@ -161,9 +160,6 @@ if __name__ == "__main__":
     elif cmd == "eval":
         run_evaluation()
     elif cmd == "run":
-        import asyncio
-
-        from src.main_loop import main as run_loop
         asyncio.run(run_loop())
     elif cmd == "distill":
         init_db()
@@ -172,8 +168,6 @@ if __name__ == "__main__":
         flush()
         print("✅ Distill complete")
     elif cmd == "health":
-        from src.db import get_connection
-
         try:
             with get_connection() as conn, conn.cursor() as cur:
                 cur.execute("SELECT 1;")
@@ -186,8 +180,6 @@ if __name__ == "__main__":
     elif cmd == "outcome":
         job_id = int(sys.argv[2]) if len(sys.argv) > 2 else 0
         kind = sys.argv[3] if len(sys.argv) > 3 else "APPLIED"
-        from src.db import get_connection
-
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("INSERT INTO outcome_events (job_id, kind) VALUES (%s, %s);", (job_id, kind))

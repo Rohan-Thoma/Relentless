@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from src.httpx_utils import post_with_retry
 from src.settings_store import get_master_profile
+from src.knowledge.store import get_store
 
 load_dotenv()
 
@@ -160,7 +161,6 @@ async def tailor_resume_for_job(job: dict, custom_instruction: str = "") -> dict
     """Runs System-2 Surgical Tailoring (OpenAI Direct or OpenRouter) + Jev Hallucination Audit + Typst PDF."""
     PROFILE = get_master_profile()
     try:
-        from src.knowledge.store import get_store
         kc = get_store().search("resume win", type=None)[:3]
         learned = "\\n".join(c.body for c in kc)
     except Exception:

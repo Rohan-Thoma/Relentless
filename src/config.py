@@ -5,6 +5,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
+from src.db import get_connection
+
 
 class CandidatePreferences(BaseModel):
     target_role_keywords: list[str] = Field(default_factory=list)
@@ -57,8 +59,6 @@ def _file_mtime(path: str) -> float | None:
 
 def _db_updated_at() -> str | None:
     try:
-        from src.db import get_connection
-
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT updated_at FROM app_settings WHERE key = 'config_yaml';")
             row = cur.fetchone()
@@ -91,8 +91,6 @@ def load_config(force: bool = False) -> AppConfig:
     # db overlay
     db_cfg = None
     try:
-        from src.db import get_connection
-
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT value FROM app_settings WHERE key = 'config_yaml';")
             row = cur.fetchone()
