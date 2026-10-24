@@ -66,8 +66,10 @@ def get_pool():
             raise ValueError("DATABASE_URL is missing in .env")
         _POOL = ConnectionPool(
             conninfo=_dsn(),
-            kwargs={"row_factory": dict_row, "connect_timeout": 3},
-            timeout=3.0,
+            kwargs={"row_factory": dict_row, "connect_timeout": 10},
+            min_size=2,
+            max_size=20,
+            timeout=30.0,
             open=False,
         )
         _POOL.open()
@@ -130,7 +132,9 @@ def reset_database(mode: str = "labels") -> str:
                 )
                 msg = f"🔄 Triage Reset complete: Reset Jev scores & labels on {cur.rowcount} scraped jobs."
             elif mode == "all":
-                cur.execute("TRUNCATE TABLE jobs RESTART IDENTITY;")
+                cur.execute(
+                    "TRUNCATE TABLE jobs, apply_events, apply_confirmations, telegram_message_jobs, outcome_events RESTART IDENTITY CASCADE;"
+                )
                 msg = "💥 Factory Reset complete: All jobs wiped and ID counter reset to #1."
             else:
                 raise ValueError("Invalid reset mode. Choose 'labels', 'triage', or 'all'.")

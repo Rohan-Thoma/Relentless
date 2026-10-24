@@ -18,9 +18,19 @@ def is_near_dup(conn, company: str, title: str) -> bool:
     if not norm:
         return False
     sorted_norm = " ".join(sorted(norm.split()))
-    with conn.cursor() as cur:
-        cur.execute("SELECT canonical_title FROM jobs WHERE LOWER(company) = LOWER(%s);", (company,))
-        rows = cur.fetchall()
+    if conn is None:
+        try:
+            from src.db import get_connection
+
+            with get_connection() as c, c.cursor() as cur:
+                cur.execute("SELECT canonical_title FROM jobs WHERE LOWER(company) = LOWER(%s);", (company,))
+                rows = cur.fetchall()
+        except Exception:
+            return False
+    else:
+        with conn.cursor() as cur:
+            cur.execute("SELECT canonical_title FROM jobs WHERE LOWER(company) = LOWER(%s);", (company,))
+            rows = cur.fetchall()
     for row in rows:
         existing = row.get("canonical_title") if isinstance(row, dict) else row[0]
         if not existing:

@@ -120,7 +120,12 @@ def matches_basic_filters(title: str, location: str) -> bool:
 
 def job_exists(conn, dedup_hash: str) -> bool:
     if conn is None:
-        return False
+        try:
+            with get_connection() as c, c.cursor() as cur:
+                cur.execute("SELECT 1 FROM jobs WHERE dedup_hash = %s", (dedup_hash,))
+                return cur.fetchone() is not None
+        except Exception:
+            return False
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM jobs WHERE dedup_hash = %s", (dedup_hash,))
         return cur.fetchone() is not None
@@ -135,12 +140,17 @@ def insert_job(
     apply_url: str,
     jd_text: str,
 ) -> bool:
+    if conn is None:
+        try:
+            with get_connection() as c:
+                return insert_job(c, source_ats, company, title, location, apply_url, jd_text)
+        except Exception as e:
+            logger.warning("Could not insert job: %s", e)
+            return False
     dedup_hash = make_dedup_hash(company, title, location)
-    if conn is not None and is_near_dup(conn, company, title):
+    if is_near_dup(conn, company, title):
         return False
     canonical = normalize_title(title)
-    if conn is None:
-        return True
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -412,10 +422,9 @@ async def run_ingestion():
         async def _run_poll(poll_fn, name, *args):
             async with sem:
                 try:
-                    with get_connection() as conn:
-                        n = await poll_fn(client, conn, *args)
-                        print(f"  [{name}] {args[0] if args else ''}: +{n} new matching jobs")
-                        return n
+                    n = await poll_fn(client, None, *args)
+                    print(f"  [{name}] {args[0] if args else ''}: +{n} new matching jobs")
+                    return n
                 except Exception as e:
                     logger.warning("Error polling [%s] %s: %s", name, args, e)
                     print(f"  [{name}] {args[0] if args else ''}: error {e}")

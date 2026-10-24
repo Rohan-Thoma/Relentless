@@ -1,5 +1,7 @@
 import asyncio
+import collections
 from datetime import UTC, datetime, timedelta
+import fcntl
 import json
 import logging
 import os
@@ -35,6 +37,50 @@ logger = logging.getLogger(__name__)
 
 # In-memory map of active edit job per chat
 _ACTIVE_EDIT_JOB: dict[int, int] = {}
+
+# In-memory deduplication of update IDs
+_PROCESSED_UPDATE_IDS = collections.deque(maxlen=1000)
+
+_BOT_LOCK_FILE = None
+
+
+def acquire_bot_lock() -> bool:
+    """Acquires exclusive, non-blocking process lock for the Telegram listener."""
+    global _BOT_LOCK_FILE
+    lock_path = "/tmp/relentless_telegram_bot.lock"
+    try:
+        f = open(lock_path, "a+")  # noqa: SIM115
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        f.seek(0)
+        f.truncate()
+        f.write(f"{os.getpid()}\n")
+        f.flush()
+        _BOT_LOCK_FILE = f
+        return True
+    except (BlockingIOError, OSError):
+        return False
+
+
+def get_active_bot_pid() -> str:
+    """Reads PID of the process currently holding the bot lock."""
+    lock_path = "/tmp/relentless_telegram_bot.lock"
+    try:
+        with open(lock_path, "r") as f:
+            return f.read().strip()
+    except Exception:
+        return "unknown"
+
+
+def release_bot_lock():
+    """Releases the bot listener process lock."""
+    global _BOT_LOCK_FILE
+    if _BOT_LOCK_FILE:
+        try:
+            fcntl.flock(_BOT_LOCK_FILE.fileno(), fcntl.LOCK_UN)
+            _BOT_LOCK_FILE.close()
+        except Exception:
+            pass
+        _BOT_LOCK_FILE = None
 
 
 def build_inline_keyboard(job_id: int) -> dict:
@@ -417,10 +463,7 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str, chat_id
     )
 
 
-async def listen_for_button_clicks():
-    if not CHAT_ID:
-        raise ValueError("TELEGRAM_CHAT_ID is required to run the Telegram listener")
-    print("🎧 Listening for Telegram button taps, replies & /commands (/help, /brain, /status)...")
+async def _listen_loop():
     offset = 0
     async with httpx.AsyncClient(timeout=60.0) as client:
         while True:
@@ -437,7 +480,13 @@ async def listen_for_button_clicks():
                         raise
 
                 for upd in data.get("result", []):
-                    offset = upd["update_id"] + 1
+                    upd_id = upd.get("update_id")
+                    if upd_id is not None:
+                        if upd_id in _PROCESSED_UPDATE_IDS:
+                            offset = max(offset, upd_id + 1)
+                            continue
+                        _PROCESSED_UPDATE_IDS.append(upd_id)
+                        offset = max(offset, upd_id + 1)
 
                     if not is_authorized(upd):
                         cb = upd.get("callback_query")
@@ -544,7 +593,11 @@ async def listen_for_button_clicks():
                         payload_data = row["payload"] or {}
                         mode = payload_data.get("mode", "labels")
                         mode_to_reset = {"labels": "labels", "triage": "triage", "all": "all"}[mode]
-                        msg = reset_database(mode_to_reset)
+                        try:
+                            msg = reset_database(mode_to_reset)
+                        except Exception as e:
+                            logger.error("Failed to reset database: %s", e)
+                            msg = f"❌ Reset failed: {e}"
                         await client.post(
                             f"{TG_BASE}/sendMessage",
                             json={"chat_id": chat_id or CHAT_ID, "text": msg},
@@ -772,6 +825,32 @@ async def listen_for_button_clicks():
                 logger.error("Telegram listener error: %s", e)
                 alert(f"⚠️ Telegram listener error: {e}")
                 await asyncio.sleep(3)
+
+
+async def listen_for_button_clicks():
+    if not CHAT_ID:
+        raise ValueError("TELEGRAM_CHAT_ID is required to run the Telegram listener")
+
+    if not acquire_bot_lock():
+        existing_pid = get_active_bot_pid()
+        logger.warning(
+            "⚠️ Telegram bot listener is already running in another process (PID %s)! "
+            "Duplicate listener will wait to prevent duplicate command execution.",
+            existing_pid,
+        )
+        print(
+            f"⚠️ Telegram bot listener is already running in another process (PID {existing_pid})! "
+            f"Waiting for existing instance to exit before taking over..."
+        )
+        while not acquire_bot_lock():
+            await asyncio.sleep(5)
+        print("🎧 Acquired Telegram bot lock. Starting listener...")
+
+    print("🎧 Listening for Telegram button taps, replies & /commands (/help, /brain, /status)...")
+    try:
+        await _listen_loop()
+    finally:
+        release_bot_lock()
 
 
 async def main():
