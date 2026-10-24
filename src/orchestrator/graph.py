@@ -175,7 +175,7 @@ async def record_result(state: JobAgentState) -> JobAgentState:
 
 def route_after_hitl(state: JobAgentState) -> str:
     if state.get("human_decision") == "APPLIED":
-        return "tailor_resume"
+        return "prepare_application"
     return "record_result"
 
 
@@ -204,8 +204,8 @@ def build_relentless_graph():
     builder.add_edge("load_context", "tailor_resume")
     builder.add_conditional_edges("tailor_resume", route_after_tailor, ["audit_resume", "record_result"])
     builder.add_edge("audit_resume", "await_tailor_approval")
-    builder.add_conditional_edges("await_tailor_approval", route_after_hitl, ["tailor_resume", "record_result"])
-    # Note: tailor_approval loop; for simplicity end after first
+    builder.add_conditional_edges("await_tailor_approval", route_after_hitl, ["prepare_application", "record_result"])
+    # After first tailor, go to prepare_application if APPLIED, else record_result
     builder.add_edge("prepare_application", "await_submit_confirmation")
     builder.add_edge("await_submit_confirmation", "submit_application")
     builder.add_edge("submit_application", "record_result")

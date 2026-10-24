@@ -222,7 +222,9 @@ async def submit_application(job, confirmation_token):
             await page.goto(job["apply_url"], timeout=30000)
             profile = get_master_profile()
             fields_filled = await fill(page, job, profile)
-            submit = await page.query_selector("button[type=submit], input[type=submit]")
+            submit = await page.query_selector(
+                "button[type=submit], input[type=submit], button:has-text('Submit'), button:has-text('Apply')"
+            )
             if not submit:
                 status = "FAILED"
                 error = "no submit button"
