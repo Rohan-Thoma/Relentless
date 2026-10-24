@@ -5,8 +5,8 @@ __pycache__/
 .env
 config/master_profile.json
 *.pdf
-output/
-knowledge/
+/output/
+/knowledge/
 .DS_Store
 .neon
 node_modules/

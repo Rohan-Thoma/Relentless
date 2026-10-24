@@ -16,6 +16,7 @@ from src.knowledge.export import export_bundle
 from src.knowledge.distiller import run_distill
 from src.settings_store import EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH, load_master_profile, sync_local_to_db
 from src.httpx_utils import get_with_retry
+from src.hitl.telegram_bot import listen_for_button_clicks
 from src.main_loop import main as run_loop
 
 ENV_FILE = ".env"
@@ -161,6 +162,9 @@ if __name__ == "__main__":
         run_evaluation()
     elif cmd == "run":
         asyncio.run(run_loop())
+    elif cmd == "bot":
+        print("🤖 Starting Telegram bot listener ONLY (independent of ingestion pipeline)...")
+        asyncio.run(listen_for_button_clicks())
     elif cmd == "distill":
         init_db()
         hydrate()

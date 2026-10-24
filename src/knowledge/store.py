@@ -99,6 +99,9 @@ class Store:
         self._hydrated = True
         self.render_indexes()
 
+    def get(self, path: str) -> Concept | None:
+        return self.concepts.get(path)
+
     def _file_path(self, concept_path):
         return os.path.join(KNOWLEDGE_DIR, concept_path + ".md")
 
@@ -278,45 +281,63 @@ class Store:
             f.write(entry + "\n")
 
     def flush(self):
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                for path in list(self.deleted):
-                    cur.execute("DELETE FROM okf_concepts WHERE path = %s;", (path,))
-                for path in list(self.dirty):
-                    c = self.concepts.get(path)
-                    if c is None:
-                        continue
-                    cur.execute(
-                        """
-                        INSERT INTO okf_concepts (path, concept_type, name, description, resource, tags, frontmatter, verified, status, stale_after, body, updated_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
-                        ON CONFLICT (path) DO UPDATE SET
-                            concept_type=EXCLUDED.concept_type,
-                            name=EXCLUDED.name,
-                            description=EXCLUDED.description,
-                            resource=EXCLUDED.resource,
-                            tags=EXCLUDED.tags,
-                            frontmatter=EXCLUDED.frontmatter,
-                            verified=EXCLUDED.verified,
-                            status=EXCLUDED.status,
-                            stale_after=EXCLUDED.stale_after,
-                            body=EXCLUDED.body,
-                            updated_at=NOW();
-                        """,
-                        (c.path, c.concept_type, c.name, c.description, c.resource, c.tags,
-                         json.dumps(c.frontmatter), json.dumps(c.verified), c.status, c.stale_after, c.body),
-                    )
-                    for rev in self.revisions.get(path, []):
-                        cur.execute("SELECT COALESCE(MAX(revision_no),0) AS m FROM knowledge_revisions WHERE path=%s;", (path,))
-                        rn = (cur.fetchone().get("m") or 0) + 1
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    for path in list(self.deleted):
+                        cur.execute("DELETE FROM okf_concepts WHERE path = %s;", (path,))
+                    for path in list(self.dirty):
+                        c = self.concepts.get(path)
+                        if c is None:
+                            continue
                         cur.execute(
-                            "INSERT INTO knowledge_revisions (path, revision_no, frontmatter, body, actor, at) VALUES (%s,%s,%s,%s,%s,NOW());",
-                            (path, rn, json.dumps(rev["frontmatter"]), rev["body"], rev["actor"]),
+                            """
+                            INSERT INTO okf_concepts (path, concept_type, name, description, resource, tags, frontmatter, verified, status, stale_after, body, updated_at)
+                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                            ON CONFLICT (path) DO UPDATE SET
+                                concept_type=EXCLUDED.concept_type,
+                                name=EXCLUDED.name,
+                                description=EXCLUDED.description,
+                                resource=EXCLUDED.resource,
+                                tags=EXCLUDED.tags,
+                                frontmatter=EXCLUDED.frontmatter,
+                                verified=EXCLUDED.verified,
+                                status=EXCLUDED.status,
+                                stale_after=EXCLUDED.stale_after,
+                                body=EXCLUDED.body,
+                                updated_at=NOW();
+                            """,
+                            (
+                                c.path,
+                                c.concept_type,
+                                c.name,
+                                c.description,
+                                c.resource,
+                                c.tags,
+                                json.dumps(c.frontmatter),
+                                json.dumps(c.verified),
+                                c.status,
+                                c.stale_after,
+                                c.body,
+                            ),
                         )
-                conn.commit()
-            self.deleted.clear()
-            self.dirty.clear()
-            self.revisions.clear()
+                        for rev in self.revisions.get(path, []):
+                            cur.execute(
+                                "SELECT COALESCE(MAX(revision_no),0) AS m FROM knowledge_revisions WHERE path=%s;",
+                                (path,),
+                            )
+                            rn = (cur.fetchone().get("m") or 0) + 1
+                            cur.execute(
+                                "INSERT INTO knowledge_revisions (path, revision_no, frontmatter, body, actor, at) VALUES (%s,%s,%s,%s,%s,NOW());",
+                                (path, rn, json.dumps(rev["frontmatter"]), rev["body"], rev["actor"]),
+                            )
+                    conn.commit()
+        except Exception:
+            pass
+        self.deleted.clear()
+        self.dirty.clear()
+        self.revisions.clear()
+        self.render_indexes()
         self._last_flushed = datetime.now(UTC).isoformat()
 
 
