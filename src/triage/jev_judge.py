@@ -8,6 +8,7 @@ from collections import Counter
 import httpx
 from dotenv import load_dotenv
 
+from src.calibrate import apply_calibration, fit_calibration
 from src.db import get_connection
 from src.httpx_utils import post_with_retry
 from src.jd_parse import parse_jd
@@ -78,8 +79,10 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
 
     try:
         store = get_store()
-        learned = store.search("scam", type="Scam Pattern")[:5]
-        learned_context = "\\n".join(c.body for c in learned)
+        learned_scam = store.search("scam", type="Scam Pattern")[:5]
+        learned_pref = store.search("preference", type="Candidate Preference")[:5]
+        learned_parts = [c.body for c in (learned_scam + learned_pref)]
+        learned_context = "\n".join(learned_parts)
     except Exception:
         learned_context = ""
 
@@ -174,7 +177,7 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
         "jev_persona": persona,
     }
 
-async def run_triage(batch_limit: int = 25):
+async def run_triage(batch_limit: int = 100):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -183,26 +186,45 @@ async def run_triage(batch_limit: int = 25):
             )
             unscored_jobs = cur.fetchall()
 
-        if not unscored_jobs:
-            print("✨ All jobs in Neon PostgreSQL are already triaged!")
-            return
+            cur.execute(
+                "SELECT jev_fit_prob, human_action FROM jobs WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM') AND jev_fit_prob IS NOT NULL;"
+            )
+            labeled_rows = cur.fetchall()
 
-        route = "TypeSafe Direct (/v1/systemone)" if TYPESAFE_API_KEY else "OpenRouter Decisions API (/api/alpha/decisions)"
-        print(f"🧠 Running System-1 Jev Triage on {len(unscored_jobs)} jobs via {route}...")
+    if not unscored_jobs:
+        print("✨ All jobs in Neon PostgreSQL are already triaged!")
+        return
 
-        passed_count = 0
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            for job in unscored_jobs:
-                cos_sim = compute_baseline_similarity(job["jd_text"])
+    pairs = [
+        (r["jev_fit_prob"], 1 if r["human_action"] == "APPLIED" else 0)
+        for r in labeled_rows
+        if r["jev_fit_prob"] is not None
+    ]
+    cal_model = fit_calibration(pairs, min_n=20)
+
+    route = "TypeSafe Direct (/v1/systemone)" if TYPESAFE_API_KEY else "OpenRouter Decisions API (/api/alpha/decisions)"
+    print(f"🧠 Running System-1 Jev Triage on {len(unscored_jobs)} jobs via {route}...")
+
+    sem = asyncio.Semaphore(5)
+    passed_count = 0
+
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        async def _score_job(job):
+            nonlocal passed_count
+            async with sem:
+                cos_sim = compute_baseline_similarity(job.get("jd_text") or "")
                 try:
                     res = await evaluate_with_jev(client, job)
+                    raw_fit = res["jev_fit_prob"]
+                    cal_fit = apply_calibration(cal_model, raw_fit) if cal_model else raw_fit
+                    effective_fit = cal_fit if cal_model else raw_fit
 
                     # Confidence Gate: Scam probability under 0.30 AND Fit probability at least 0.55
-                    passed = (res["jev_scam_prob"] < 0.30) and (res["jev_fit_prob"] >= 0.55)
+                    passed = (res["jev_scam_prob"] < 0.30) and (effective_fit >= 0.55)
                     if passed:
                         passed_count += 1
 
-                    with conn.cursor() as cur:
+                    with get_connection() as c, c.cursor() as cur:
                         cur.execute(
                             """
                             UPDATE jobs
@@ -210,6 +232,7 @@ async def run_triage(batch_limit: int = 25):
                                 jev_scam_prob = %s,
                                 jev_fit_tier = %s,
                                 jev_fit_prob = %s,
+                                jev_fit_prob_cal = %s,
                                 jev_persona = %s,
                                 triage_passed = %s
                             WHERE id = %s;
@@ -218,23 +241,27 @@ async def run_triage(batch_limit: int = 25):
                                 cos_sim,
                                 res["jev_scam_prob"],
                                 res["jev_fit_tier"],
-                                res["jev_fit_prob"],
+                                raw_fit,
+                                cal_fit,
                                 res["jev_persona"],
                                 passed,
                                 job["id"],
                             ),
                         )
-                    conn.commit()
+                        c.commit()
+
                     icon = "✅ PASS" if passed else "🗑️ DROP"
                     print(
                         f"  {icon} | [{job['company']}] {job['title'][:42]} "
-                        f"-> Fit: {res['jev_fit_prob']:.2f} ({res['jev_fit_tier']}) | Scam: {res['jev_scam_prob']:.2f}"
+                        f"-> Fit: {raw_fit:.2f} (cal={cal_fit:.2f}, {res['jev_fit_tier']}) | Scam: {res['jev_scam_prob']:.2f}"
                     )
                 except Exception as e:
                     logger.error("Error scoring job #%s (%s): %s", job["id"], job["company"], e)
                     alert(f"⚠️ Error scoring job #{job['id']} ({job['company']}): {e}")
 
-        print(f"\n🎯 Jev Triage finished! {passed_count}/{len(unscored_jobs)} jobs cleared the gate.")
+        await asyncio.gather(*[_score_job(job) for job in unscored_jobs])
+
+    print(f"\n🎯 Jev Triage finished! {passed_count}/{len(unscored_jobs)} jobs cleared the gate.")
 
 if __name__ == "__main__":
     asyncio.run(run_triage())

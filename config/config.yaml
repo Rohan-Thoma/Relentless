@@ -61,6 +61,11 @@ candidate_preferences:
   - model deployment
   - inference
   - pipeline automation
+  - backend
+  - backend engineer
+  - data
+  - data engineer
+  - software engineer
   exclude_title_keywords:
   - staff
   - principal
@@ -88,33 +93,197 @@ candidate_preferences:
 ats_targets:
   greenhouse:
   - airtable
-  - canva
-  - clickup
-  - databricks
-  - figma
-  - loom
-  - notion
-  - postman
-  - razorpay
-  - retool
-  - rubrik
-  - stripe
-  - vanta
-  lever:
-  - notion
-  - palantir
-  - slack
-  - spotify
-  - zeta
-  ashby:
+  - algolia
+  - amplitude
   - anthropic
+  - apollo
+  - asana
+  - Block
+  - brex
+  - browserstack
+  - canva
+  - chargebee
+  - chronicle
+  - cloudflare
+  - cockroachlabs
+  - coinbase
+  - coherent
+  - confluent
+  - coursera
+  - cresta
+  - crowdstrike
+  - databricks
+  - datadog
+  - deepmind
+  - deel
+  - descript
+  - discord
+  - doordash
+  - dropbox
+  - duolingo
+  - elastic
+  - envoy
+  - figma
+  - fivetran
+  - freshworks
+  - gitlab
+  - glean
+  - gojek
+  - grafana
+  - grammarly
+  - gusto
+  - hashicorp
+  - hubspot
+  - instacart
+  - intercom
+  - klaviyo
+  - launchdarkly
+  - linear
+  - loom
+  - lyft
+  - meesho
+  - mongodb
+  - netlify
+  - newrelic
+  - notion
+  - okta
+  - pagerduty
+  - pinterest
+  - plaid
+  - planetscale
+  - postman
+  - purestorage
+  - razorpay
+  - reddit
+  - retool
+  - robinhood
+  - rubrik
+  - runwayml
+  - Samsara
+  - scaleai
+  - semgrep
+  - sentry
+  - singlestore
+  - snowflake
+  - sourcegraph
+  - squarespace
+  - stripe
+  - supabase
+  - temporal
+  - thoughtspot
+  - togetherai
+  - twilio
+  - udemy
+  - upstart
+  - vanta
+  - vercel
+  - waymo
+  - weightsandbiases
+  - zapier
+  - zscaler
+  lever:
+  - accurate
+  - agnikul
+  - atherenergy
+  - brightmachines
+  - clevertap
+  - cohere
+  - cred
+  - darwinbox
+  - dream11
+  - fampay
+  - groww
+  - hasura
+  - inovonics
+  - jar
+  - juspay
+  - khatabook
+  - kraken
+  - lenskart
+  - mistral
+  - netflix
+  - niyo
+  - notion
+  - olacabs
+  - palantir
+  - Paytm
+  - plaid
+  - plum
+  - postman
+  - practo
+  - rapido
+  - roposo
+  - rupeek
+  - sarvam
+  - shiprocket
+  - slice
+  - spotify
+  - swiggy
+  - turvo
+  - udaan
+  - uniphore
+  - upstox
+  - vedantu
+  - zepto
+  - zeta
+  - zomato
+  ashby:
+  - abacusai
+  - adaptive
+  - anthropic
+  - anyscale
+  - baseten
+  - buttondown
+  - character
+  - chroma
+  - clay
+  - codeium
+  - cohere
+  - convex
+  - cursor
+  - deepgram
+  - elevenlabs
+  - exa
+  - fal
+  - fireworks
+  - flock
+  - harvey
   - huggingface
+  - inflection
+  - langchain
   - langfuse
   - linear
+  - llamaindex
+  - magic
+  - mem0
   - midjourney
+  - modal
+  - motherduck
+  - neon
+  - ollama
   - openai
+  - perplexity
+  - pinecone
+  - posthog
+  - primeintellect
+  - qdrant
+  - railway
+  - replit
+  - resend
+  - replicate
+  - roboflow
+  - Sierra
   - stabilityai
+  - Statsig
   - supabase
+  - synthesia
+  - together
+  - turso
+  - unstructured
+  - vapi
+  - weaviate
+  - writer
+  - zed
   workday_cxs:
   - company: NVIDIA
     tenant: nvidia
@@ -141,6 +310,11 @@ ats_targets:
   - SAPITBusinessSysteme
   - StarbucksAU
   - TurnerTownsend
+  - AveryDennison
+  - BICS
+  - CERN
+  - Visa
+  - Ubisoft
   recruitee:
   - bunq
   - intermategroupgmbh
@@ -149,6 +323,9 @@ ats_targets:
   - fauve
   - kununu
   - greenpeace
+  - transmetrics
+  - tacoma
+  - scoutbee
 automation:
   # PRESET SELECTOR: choose safe / balanced / fast
   # This tells YOU which preset is active. The values below are what the agent reads.

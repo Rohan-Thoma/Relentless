@@ -5,6 +5,7 @@ import os
 from src.db import init_db
 from src.apply.runner import prepare_apply_cycle
 from src.knowledge.store import hydrate
+from src.knowledge.distiller import run_distill
 from src.hitl.telegram_bot import listen_for_button_clicks, send_pending_digests
 from src.ingestors.ats_poller import run_ingestion
 from src.notify import alert
@@ -23,7 +24,7 @@ async def scheduled_pipeline_worker():
             # STREAMING: Send digest immediately after finding jobs (before triage completes)
             await send_pending_digests(limit=5)
             print("📨 Digest sent (new jobs found)")
-            await run_triage(batch_limit=30)
+            await run_triage(batch_limit=100)
             # STREAMING: Send updated scores after triage
             await send_pending_digests(limit=5)
             print("📨 Digest updated (triage scores)")
@@ -35,6 +36,11 @@ async def scheduled_pipeline_worker():
             except Exception as e:
                 logger.error("Auto apply cycle error: %s", e)
                 alert(f"⚠️ Auto apply cycle error: {e}")
+            try:
+                d_res = run_distill()
+                print(f"🧠 [OKF Brain] Distillation complete: {d_res}")
+            except Exception as e:
+                logger.error("Distillation error: %s", e)
             print(f"✅ [Scheduler] Cycle complete. Sleeping for {POLL_INTERVAL_HOURS} hours...")
         except Exception as e:
             logger.error("Scheduler error during cycle: %s", e)
