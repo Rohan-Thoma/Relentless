@@ -1,12 +1,17 @@
+from contextlib import contextmanager
 import hashlib
+import logging
 import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
+import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -66,9 +71,19 @@ def get_pool():
             raise ValueError("DATABASE_URL is missing in .env")
         _POOL = ConnectionPool(
             conninfo=_dsn(),
-            kwargs={"row_factory": dict_row, "connect_timeout": 10},
-            min_size=2,
+            kwargs={
+                "row_factory": dict_row,
+                "connect_timeout": 10,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+            },
+            check=ConnectionPool.check_connection,
+            min_size=1,
             max_size=20,
+            max_idle=120.0,
+            max_lifetime=1800.0,
             timeout=30.0,
             open=False,
         )
@@ -76,10 +91,25 @@ def get_pool():
     return _POOL
 
 
+@contextmanager
 def get_connection():
     if not _dsn():
         raise ValueError("DATABASE_URL is missing in .env")
-    return get_pool().connection()
+    pool = get_pool()
+    for attempt in range(2):
+        try:
+            with pool.connection() as conn:
+                yield conn
+                return
+        except (psycopg.OperationalError, psycopg.errors.ConnectionException) as e:
+            if attempt == 0:
+                logger.warning("Database connection dropped (%s). Retrying with fresh connection...", e)
+                try:
+                    pool.check()
+                except Exception:
+                    pass
+                continue
+            raise
 
 
 def close_pool():

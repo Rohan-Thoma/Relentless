@@ -32,21 +32,21 @@ class SkillCategory(BaseModel):
 
 class TailoredResumeOutput(BaseModel):
     tailored_summary: str = Field(
-        description="3-sentence high-impact executive summary tailored to the target role and company."
+        description="3-sentence high-impact executive summary. Do not explicitly name the target job title; focus directly on the candidate's core expertise and achievements."
     )
     matched_keywords: list[str] = Field(description="Top 10-15 ATS keywords aligned with the JD.")
     skill_categories: list[SkillCategory] = Field(
         default_factory=list, description="3 to 5 organized skill categories tailored to the JD."
     )
     tailored_bullets_role_1: list[str] = Field(
-        description="4 to 5 surgically tailored bullets for experience[0] (Kynea Solutions LLP)."
+        description="5 surgically tailored bullets for experience[0] (Kynea Solutions LLP). Preserve all project accomplishments without cutting down."
     )
     tailored_bullets_role_2: list[str] = Field(
-        description="4 to 5 surgically tailored bullets for experience[1] (Starinco - ML Engineer)."
+        description="6 to 7 surgically tailored bullets for experience[1] (Starinco - ML Engineer). Preserve all project accomplishments without cutting down."
     )
     tailored_bullets_role_3: list[str] = Field(
         default_factory=list,
-        description="2 to 3 surgically tailored bullets for experience[2] (Starinco - Jr. ML Engineer).",
+        description="4 to 7 surgically tailored bullets for experience[2] (Starinco - Jr. ML Engineer). Preserve all project accomplishments without cutting down.",
     )
     change_rationale: list[str] = Field(
         description="3 to 4 bullet points explaining specific rephrasings, keyword alignments, and domain nuances added."
@@ -177,13 +177,8 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
 
 #v(4pt)
 #line(length: 100%, stroke: 0.5pt)
-#text(size: 10.5pt, weight: "bold")[EXECUTIVE SUMMARY — {escape_typst(role_title.upper())}] \\
+#text(size: 10.5pt, weight: "bold")[EXECUTIVE SUMMARY] \\
 {escape_typst(tailored['tailored_summary'])}
-
-#v(4pt)
-#line(length: 100%, stroke: 0.5pt)
-#text(size: 10.5pt, weight: "bold")[TECHNICAL SKILLS]
-{skills_block}
 
 #v(4pt)
 #line(length: 100%, stroke: 0.5pt)
@@ -202,6 +197,11 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict) -> str:
 )
 {b2_typ}
 {exp3_block}
+#v(4pt)
+#line(length: 100%, stroke: 0.5pt)
+#text(size: 10.5pt, weight: "bold")[TECHNICAL SKILLS]
+{skills_block}
+
 #v(4pt)
 #line(length: 100%, stroke: 0.5pt)
 #text(size: 10.5pt, weight: "bold")[EDUCATION] \\
@@ -236,19 +236,28 @@ async def tailor_resume_for_job(job: dict, custom_instruction: str = "") -> dict
 Your goal is to craft a deeply compelling, ATS-optimized, human-sounding resume for the candidate targeting {job['title']} at {job['company']}.
 
 HOW TO TAILOR INTELLIGENTLY (CRITICAL RULES):
-1. DO NOT just copy-paste bullets verbatim from the Master Profile! Actively REPHRASE and REFRAME each bullet so its technical narrative, architectural verbs, and impact directly mirror what {job['company']} is looking for in the Job Description.
-2. FIX ALL TYPOS & GRAMMAR in the raw profile (e.g., fix missing spaces like 'portal.Integrated' -> 'portal. Integrated', fix 'guvicorn' -> 'Gunicorn', 'open-cv' -> 'OpenCV', 'yolov8' -> 'YOLOv8', 'pygui' -> 'PyAutoGUI', 'atleast' -> 'at least').
-3. SMART DOMAIN NUANCE & ECOSYSTEM INFERENCE:
+1. PRESERVE FULL BULLET DEPTH (DO NOT REDUCE BULLETS):
+   - The candidate wants their complete, rich experience reflected. Do NOT prune or cut down the bullet points!
+   - For experience[0] (Kynea Solutions LLP), generate 5 surgically tailored bullets covering all projects (RAG chatbot, NLP intent/aerospace, CV container defect detection, VLM map extraction, composite draping platform).
+   - For experience[1] (Starinco - ML Engineer), generate 6 to 7 surgically tailored bullets covering all key projects (DeepSeek-VL2 OCR, vehicle speed detection, furnace billet/people recognition pilot, YOLOv8 deployment service, Jetson Nano/edge TensorRT, pipe layer counting, automated pipe calibration).
+   - For experience[2] (Starinco - Jr. ML Engineer), generate 4 to 6 surgically tailored bullets (forklift safety system, fire detection enhancement, transport management system, Tkinter/PyAutoGUI labelling tool, Jetson DeepFace, crowd detection).
+2. DO NOT WRITE TARGET JOB TITLE IN SUMMARY:
+   - In `tailored_summary`, craft a 3-sentence high-impact executive summary that emphasizes the candidate's deep machine learning, GenAI, and computer vision expertise directly. DO NOT explicitly write the target job title or target company name inside the summary text.
+3. ACTUALLY REPHRASE AND REFRAME:
+   - DO NOT just copy-paste bullets verbatim! Actively REPHRASE and REFRAME each bullet so its technical narrative, architectural verbs, and impact directly mirror what {job['company']} is looking for in the Job Description, while keeping the original facts and achievements true.
+4. FIX ALL TYPOS & GRAMMAR:
+   - Fix all raw profile typos (e.g., fix missing spaces like 'portal.Integrated' -> 'portal. Integrated', fix 'guvicorn' -> 'Gunicorn', 'open-cv' -> 'OpenCV', 'yolov8' -> 'YOLOv8', 'pygui' -> 'PyAutoGUI', 'atleast' -> 'at least').
+5. SMART DOMAIN NUANCE & ECOSYSTEM INFERENCE:
    - A real engineer who built production LangGraph/RAG/LLM systems naturally works with LLM observability/tracing (e.g., LangSmith, Langfuse), prompt evaluation, hybrid retrieval, chunking, and Guardrails.
    - A real engineer who built YOLOv8/TensorRT/ONNX/DeepStream pipelines naturally understands model quantization (FP16/INT8), NMS post-processing, frame batching, and edge latency profiling.
    - A real engineer who built FastAPI/Gunicorn/Nginx + AWS EC2/S3/Lambda/Bedrock + MLflow/Airflow/Grafana naturally understands async REST microservices, CI/CD, container orchestration, and drift/latency monitoring.
    - You ARE ENCOURAGED to weave these natural, domain-adjacent engineering nuances and JD terminology into the bullets where they logically fit the project's architecture.
-4. STRICT BOUNDARIES (WHAT NOT TO INVENT):
+6. STRICT BOUNDARIES (WHAT NOT TO INVENT):
    - Never invent fake employers, fake job titles, fake employment dates, or fake degrees.
    - Never fabricate completely unrelated tech paradigms that contradict the candidate's background (e.g., do not claim 5 years of iOS Swift/Objective-C, Mainframe COBOL, or SAP ABAP).
-5. USER EDIT INSTRUCTIONS HAVE HIGHEST PRIORITY:
+7. USER EDIT INSTRUCTIONS HAVE HIGHEST PRIORITY:
    - If 'Additional User Instruction' is provided below, you MUST execute every change the user asked for faithfully.
-6. CATEGORIZE SKILLS SMARTLY:
+8. CATEGORIZE SKILLS SMARTLY:
    - Group the candidate's relevant skills + natural ecosystem tools into 3 to 5 clean `skill_categories` (e.g., "GenAI, LLMs & Agentic AI", "Computer Vision & Edge Inference", "Backend Microservices & Cloud", "MLOps, Monitoring & Data Pipelines"), placing the JD's highest-priority keywords first in each category.
 
 Candidate Master Profile:
@@ -270,14 +279,14 @@ Learned Knowledge Context:
 
 Return ONLY valid JSON matching this schema:
 {{
-  "tailored_summary": "3-sentence ATS-aligned executive summary",
+  "tailored_summary": "3-sentence ATS-aligned executive summary (without naming the target job title)",
   "matched_keywords": ["skill1", "skill2", "skill3"],
   "skill_categories": [
     {{"category": "Category Name", "skills": ["skill1", "skill2"]}}
   ],
-  "tailored_bullets_role_1": ["bullet 1", "bullet 2", "bullet 3", "bullet 4"],
-  "tailored_bullets_role_2": ["bullet 1", "bullet 2", "bullet 3", "bullet 4"],
-  "tailored_bullets_role_3": ["bullet 1", "bullet 2"],
+  "tailored_bullets_role_1": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
+  "tailored_bullets_role_2": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5", "bullet 6", "bullet 7"],
+  "tailored_bullets_role_3": ["bullet 1", "bullet 2", "bullet 3", "bullet 4"],
   "change_rationale": ["what changed 1", "what changed 2"]
 }}"""
 

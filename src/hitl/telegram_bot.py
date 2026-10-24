@@ -529,39 +529,77 @@ async def _listen_loop():
 
                         # Method 3: User previously tapped '✏️ Request Resume Changes'
                         elif chat_id in _ACTIVE_EDIT_JOB:
-                            resolved_jid = _ACTIVE_EDIT_JOB.pop(chat_id)
+                            resolved_jid = _ACTIVE_EDIT_JOB[chat_id]
                             edit_instruction = text_in.strip()
 
-                        if resolved_jid:
-                            with get_connection() as conn:
-                                with conn.cursor() as cur:
+                        # Method 4: Fallback to the latest job referenced in telegram_message_jobs for this chat
+                        if not resolved_jid:
+                            try:
+                                with get_connection() as conn, conn.cursor() as cur:
                                     cur.execute(
-                                        "SELECT id, company, title, jd_text, jev_persona, apply_url, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;",
-                                        (resolved_jid,),
+                                        "SELECT job_id FROM telegram_message_jobs WHERE chat_id = %s ORDER BY created_at DESC LIMIT 1;",
+                                        (chat_id,),
                                     )
-                                    jr = cur.fetchone()
+                                    row = cur.fetchone()
+                                    if row and row.get("job_id"):
+                                        resolved_jid = row["job_id"]
+                                        edit_instruction = text_in.strip()
+                            except Exception:
+                                pass
 
-                            if jr:
-                                _append_user_edit_note(resolved_jid, edit_instruction)
-                                # Asynchronously trigger OKF distillation
-                                asyncio.create_task(asyncio.to_thread(run_distill))
+                        # Method 5: Fallback to the latest active job in the system
+                        if not resolved_jid:
+                            try:
+                                with get_connection() as conn, conn.cursor() as cur:
+                                    cur.execute(
+                                        "SELECT id FROM jobs WHERE workflow_stage IN ('PROCESSING', 'EDITING', 'REVIEWED') OR human_action IS NOT NULL ORDER BY id DESC LIMIT 1;"
+                                    )
+                                    row = cur.fetchone()
+                                    if row and row.get("id"):
+                                        resolved_jid = row["id"]
+                                        edit_instruction = text_in.strip()
+                            except Exception:
+                                pass
 
+                        if resolved_jid:
+                            try:
+                                with get_connection() as conn:
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            "SELECT id, company, title, jd_text, jev_persona, apply_url, tailored_pdf_path, tailored_pdf_sha256 FROM jobs WHERE id = %s;",
+                                            (resolved_jid,),
+                                        )
+                                        jr = cur.fetchone()
+
+                                if jr:
+                                    _append_user_edit_note(resolved_jid, edit_instruction)
+                                    _ACTIVE_EDIT_JOB.pop(chat_id, None)
+                                    # Asynchronously trigger OKF distillation
+                                    asyncio.create_task(asyncio.to_thread(run_distill))
+
+                                    await client.post(
+                                        f"{TG_BASE}/sendMessage",
+                                        json={
+                                            "chat_id": chat_id,
+                                            "text": (
+                                                f"📝 Noted for Job #{resolved_jid} ({jr['company']} — {jr['title']})!\n"
+                                                f"Re-tailoring your resume with: \"{edit_instruction}\".\n"
+                                                "I'll ping you here as soon as the updated PDF is ready!"
+                                            ),
+                                        },
+                                    )
+                                    # Spawn concurrent re-tailoring
+                                    asyncio.create_task(
+                                        _process_job_interest(
+                                            dict(jr), chat_id, custom_note=edit_instruction, is_edit=True
+                                        )
+                                    )
+                                    continue
+                            except Exception as e:
+                                logger.error("Error processing user edit note for job %s: %s", resolved_jid, e)
                                 await client.post(
                                     f"{TG_BASE}/sendMessage",
-                                    json={
-                                        "chat_id": chat_id,
-                                        "text": (
-                                            f"📝 Noted for Job #{resolved_jid} ({jr['company']} — {jr['title']})!\n"
-                                            f"Re-tailoring your resume with: \"{edit_instruction}\".\n"
-                                            "I'll ping you here as soon as the updated PDF is ready!"
-                                        ),
-                                    },
-                                )
-                                # Spawn concurrent re-tailoring
-                                asyncio.create_task(
-                                    _process_job_interest(
-                                        dict(jr), chat_id, custom_note=edit_instruction, is_edit=True
-                                    )
+                                    json={"chat_id": chat_id, "text": f"⚠️ Could not process edit note: {e}"},
                                 )
                                 continue
 
