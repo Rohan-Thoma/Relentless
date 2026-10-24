@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
-from src.db_migrate import run_migrations
 
 load_dotenv()
 
@@ -65,7 +64,12 @@ def get_pool():
     if _POOL is None:
         if not _dsn():
             raise ValueError("DATABASE_URL is missing in .env")
-        _POOL = ConnectionPool(conninfo=_dsn(), kwargs={"row_factory": dict_row}, open=False)
+        _POOL = ConnectionPool(
+            conninfo=_dsn(),
+            kwargs={"row_factory": dict_row, "connect_timeout": 3},
+            timeout=3.0,
+            open=False,
+        )
         _POOL.open()
     return _POOL
 
@@ -89,6 +93,7 @@ def make_dedup_hash(company: str, title: str, location: str) -> str:
 
 
 def init_db():
+    from src.db_migrate import run_migrations
     run_migrations()
     print("✅ Neon PostgreSQL initialized (migrations applied)!")
 

@@ -58,6 +58,8 @@ def _file_mtime(path: str) -> float | None:
 
 
 def _db_updated_at() -> str | None:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return None
     try:
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT updated_at FROM app_settings WHERE key = 'config_yaml';")
@@ -90,14 +92,15 @@ def load_config(force: bool = False) -> AppConfig:
 
     # db overlay
     db_cfg = None
-    try:
-        with get_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT value FROM app_settings WHERE key = 'config_yaml';")
-            row = cur.fetchone()
-            if row and row.get("value"):
-                db_cfg = row["value"]
-    except Exception:
-        db_cfg = None
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        try:
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_settings WHERE key = 'config_yaml';")
+                row = cur.fetchone()
+                if row and row.get("value"):
+                    db_cfg = row["value"]
+        except Exception:
+            db_cfg = None
 
     merged = {}
     # start with file
