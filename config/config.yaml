@@ -456,7 +456,7 @@ jobboards:
     - naukri
     - linkedin
     - indeed
-    - google
+    # Note: 'google' is excluded by default as Google Search blocks unproxied IP requests with 429.
   search_terms:
     - "Machine Learning Engineer"
     - "AI Engineer"
@@ -481,5 +481,12 @@ gmail_scanner:
     - job
     - hiring
     - alert
+
+ingestion:
+  prioritize_scraping: true    # Scrape JobSpy + Gmail before crawling ATS
+  scrape_only: true           # Set to true to bypass slow ATS boards completely
+  enable_jobboards: true       # Enable JobSpy multi-board search
+  enable_gmail: true           # Enable Gmail alert scanner
+  enable_ats: false             # Enable company ATS targets (Greenhouse, Lever, etc.)
 
 

@@ -42,7 +42,7 @@ class AutomationConfig(BaseModel):
 
 
 class JobboardsConfig(BaseModel):
-    sites: list[str] = Field(default_factory=lambda: ["naukri", "linkedin", "indeed", "google"])
+    sites: list[str] = Field(default_factory=lambda: ["naukri", "linkedin", "indeed"])
     search_terms: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
     results_wanted: int = 20
@@ -66,12 +66,21 @@ class GmailScannerConfig(BaseModel):
     )
 
 
+class IngestionConfig(BaseModel):
+    prioritize_scraping: bool = True
+    scrape_only: bool = False
+    enable_jobboards: bool = True
+    enable_gmail: bool = True
+    enable_ats: bool = True
+
+
 class AppConfig(BaseModel):
     candidate_preferences: CandidatePreferences = Field(default_factory=CandidatePreferences)
     ats_targets: ATSTargets = Field(default_factory=ATSTargets)
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
     jobboards: JobboardsConfig = Field(default_factory=JobboardsConfig)
     gmail_scanner: GmailScannerConfig = Field(default_factory=GmailScannerConfig)
+    ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
 
 
 _config_cache: dict[str, Any] = {"value": None, "file_mtime": None, "db_updated": None}
@@ -141,6 +150,12 @@ def load_config(force: bool = False) -> AppConfig:
     if os.getenv("APPLY_MODE"):
         merged.setdefault("automation", {})
         merged["automation"]["apply_mode"] = os.getenv("APPLY_MODE")
+    if os.getenv("RELENTLESS_SCRAPE_ONLY") in ("1", "true", "yes", "True"):
+        merged.setdefault("ingestion", {})
+        merged["ingestion"]["scrape_only"] = True
+    if os.getenv("RELENTLESS_SKIP_ATS") in ("1", "true", "yes", "True"):
+        merged.setdefault("ingestion", {})
+        merged["ingestion"]["enable_ats"] = False
 
     try:
         cfg = AppConfig(**merged)

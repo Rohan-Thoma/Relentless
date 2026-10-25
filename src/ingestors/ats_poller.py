@@ -328,7 +328,47 @@ def load_discovered_boards(conn=None) -> dict[str, list]:
     return discovered
 
 
-async def run_ingestion():
+async def poll_all_scraping(sources: list[str] | None = None) -> int:
+    """High-priority scraping ingestion:
+
+    Runs JobSpy multi-board search (Naukri, LinkedIn, Indeed, Google) and Gmail job alerts.
+    """
+    cfg = _cfg()
+    ingest_cfg = getattr(cfg, "ingestion", None)
+    active_sources = {s.lower() for s in (sources or ["jobboards", "gmail"])}
+    total = 0
+
+    if "jobboards" in active_sources and (ingest_cfg is None or ingest_cfg.enable_jobboards):
+        try:
+            print("  🌐 [Phase 1.1] Querying JobSpy direct job boards (Naukri, LinkedIn, Indeed)...", flush=True)
+            jb_new = await poll_jobboards()
+            print(f"  ✅ [Phase 1.1 Complete] JobSpy: +{jb_new} new matching jobs added.", flush=True)
+            if isinstance(jb_new, int):
+                total += jb_new
+        except Exception as e:
+            print(f"  ❌ JobSpy ingestion failed: {e}", flush=True)
+            logger.warning("JobSpy ingestion failed: %s", e)
+
+    if "gmail" in active_sources and (ingest_cfg is None or ingest_cfg.enable_gmail):
+        try:
+            print("  📧 [Phase 1.2] Scanning Gmail inbox for job alerts...", flush=True)
+            gmail_new = await poll_gmail_alerts()
+            print(f"  ✅ [Phase 1.2 Complete] Gmail Alerts: +{gmail_new} new matching jobs added.", flush=True)
+            if isinstance(gmail_new, int):
+                total += gmail_new
+        except Exception as e:
+            print(f"  ❌ Gmail alert scanner failed: {e}", flush=True)
+            logger.warning("Gmail alert scanner failed: %s", e)
+
+    return total
+
+
+async def poll_all_ats(platforms: list[str] | None = None) -> int:
+    """Leisurely ATS crawling:
+
+    Scans company ATS targets (Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Recruitee, Remotive, Arbeitnow)
+    plus dynamically discovered boards from the database.
+    """
     ats = _cfg().ats_targets
     targets = {
         "greenhouse": list(ats.greenhouse),
@@ -358,6 +398,8 @@ async def run_ingestion():
             targets["workday_cxs"].append(w)
             existing_wd_keys.add(wd_key)
 
+    active_plats = {p.lower() for p in platforms} if platforms else None
+
     headers = {"User-Agent": "Mozilla/5.0 (compatible; RelentlessJobScout/1.0)"}
     sem = asyncio.Semaphore(10)
 
@@ -375,42 +417,84 @@ async def run_ingestion():
                     print(f"  [{name}] {args[0] if args else ''}: error {e}")
                     return 0
 
-        for b in targets.get("greenhouse", []):
-            tasks.append(_run_poll(poll_greenhouse, "Greenhouse", b))
-        for s in targets.get("lever", []):
-            tasks.append(_run_poll(poll_lever, "Lever", s))
-        for a in targets.get("ashby", []):
-            tasks.append(_run_poll(poll_ashby, "Ashby", a))
-        for w in targets.get("workday_cxs", []):
-            tasks.append(_run_poll(poll_workday, "Workday", w))
-        for s in targets.get("smartrecruiters", []):
-            tasks.append(_run_poll(poll_smartrecruiters, "SmartRecruiters", s))
-        for r in targets.get("recruitee", []):
-            tasks.append(_run_poll(poll_recruitee, "Recruitee", r))
+        if not active_plats or "greenhouse" in active_plats:
+            for b in targets.get("greenhouse", []):
+                tasks.append(_run_poll(poll_greenhouse, "Greenhouse", b))
+        if not active_plats or "lever" in active_plats:
+            for s in targets.get("lever", []):
+                tasks.append(_run_poll(poll_lever, "Lever", s))
+        if not active_plats or "ashby" in active_plats:
+            for a in targets.get("ashby", []):
+                tasks.append(_run_poll(poll_ashby, "Ashby", a))
+        if not active_plats or "workday" in active_plats or "workday_cxs" in active_plats:
+            for w in targets.get("workday_cxs", []):
+                tasks.append(_run_poll(poll_workday, "Workday", w))
+        if not active_plats or "smartrecruiters" in active_plats:
+            for s in targets.get("smartrecruiters", []):
+                tasks.append(_run_poll(poll_smartrecruiters, "SmartRecruiters", s))
+        if not active_plats or "recruitee" in active_plats:
+            for r in targets.get("recruitee", []):
+                tasks.append(_run_poll(poll_recruitee, "Recruitee", r))
 
-        tasks.append(_run_poll(poll_remotive, "Remotive"))
-        tasks.append(_run_poll(poll_arbeitnow, "Arbeitnow"))
+        if not active_plats or "remotive" in active_plats:
+            tasks.append(_run_poll(poll_remotive, "Remotive"))
+        if not active_plats or "arbeitnow" in active_plats:
+            tasks.append(_run_poll(poll_arbeitnow, "Arbeitnow"))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         total_new = sum(r for r in results if isinstance(r, int))
+        return total_new
 
-    # Ingest from JobSpy job boards
-    try:
-        jb_new = await poll_jobboards()
-        print(f"  [JobSpy] Direct job boards: +{jb_new} new matching jobs")
-        if isinstance(jb_new, int):
-            total_new += jb_new
-    except Exception as e:
-        logger.warning("JobSpy ingestion failed: %s", e)
 
-    # Ingest from Gmail job alerts
-    try:
-        gmail_new = await poll_gmail_alerts()
-        print(f"  [Gmail Alerts] Email parser: +{gmail_new} new matching jobs")
-        if isinstance(gmail_new, int):
-            total_new += gmail_new
-    except Exception as e:
-        logger.warning("Gmail alert scanner failed: %s", e)
+async def run_ingestion(
+    sources: list[str] | None = None,
+    skip_ats: bool = False,
+    scrape_only: bool = False,
+    ats_only: bool = False,
+    prioritize_scraping: bool = True,
+) -> int:
+    """Unified Ingestion Runner.
+
+    Default: Prioritizes fast scraping (JobSpy + Gmail) before scanning ATS targets.
+    Supports scrape_only / skip_ats to bypass slow ATS boards entirely.
+    """
+    cfg = _cfg()
+    ingest_cfg = getattr(cfg, "ingestion", None)
+
+    env_scrape_only = os.getenv("RELENTLESS_SCRAPE_ONLY", "").lower() in ("1", "true", "yes")
+    env_skip_ats = os.getenv("RELENTLESS_SKIP_ATS", "").lower() in ("1", "true", "yes")
+
+    cfg_scrape_only = getattr(ingest_cfg, "scrape_only", False) if ingest_cfg else False
+    cfg_enable_ats = getattr(ingest_cfg, "enable_ats", True) if ingest_cfg else True
+
+    do_scrape_only = scrape_only or env_scrape_only or cfg_scrape_only
+    do_skip_ats = skip_ats or env_skip_ats or not cfg_enable_ats or do_scrape_only
+    do_ats_only = ats_only
+
+    total_new = 0
+
+    if prioritize_scraping:
+        # Phase 1: High-Speed Scraping (JobSpy + Gmail)
+        if not do_ats_only:
+            print("\n⚡ [1/2] Fast Scraping: Polling JobSpy multi-board & Gmail alerts...")
+            scrape_new = await poll_all_scraping(sources=sources)
+            total_new += scrape_new
+
+        # Phase 2: Leisurely ATS Boards
+        if not do_skip_ats and not do_scrape_only:
+            print("\n🐢 [2/2] Leisurely ATS: Scanning Greenhouse, Lever, Ashby, Workday...")
+            ats_new = await poll_all_ats()
+            total_new += ats_new
+        elif do_scrape_only:
+            print("⏩ ATS polling skipped (Scrape-only mode active).")
+    else:
+        # Secondary order: ATS first, scraping second
+        if not do_skip_ats and not do_scrape_only:
+            ats_new = await poll_all_ats()
+            total_new += ats_new
+        if not do_ats_only:
+            scrape_new = await poll_all_scraping(sources=sources)
+            total_new += scrape_new
 
     print(f"\n🚀 Ingestion complete! {total_new} brand-new jobs saved to Neon PostgreSQL.")
     return total_new

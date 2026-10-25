@@ -360,6 +360,7 @@ async def poll_gmail_alerts(
     gmail_password = os.getenv("GMAIL_APP_PASSWORD", "").strip()
 
     if not gmail_address or not gmail_password:
+        print("  📬 [Gmail Scanner] GMAIL_ADDRESS or GMAIL_APP_PASSWORD not set. Skipping.", flush=True)
         logger.info("Gmail credentials (GMAIL_ADDRESS/GMAIL_APP_PASSWORD) not set. Skipping.")
         return 0
 
@@ -385,6 +386,10 @@ async def poll_gmail_alerts(
             scanner_cfg.label if scanner_cfg else "professional-job_alerts"
         )
 
+    print(
+        f"  📬 [Gmail Scanner] Checking mailbox '{gmail_address}' for label '{label}' (lookback: {days} days)...",
+        flush=True,
+    )
     emails = await asyncio.to_thread(
         fetch_alert_emails_sync,
         gmail_address=gmail_address,
@@ -395,19 +400,27 @@ async def poll_gmail_alerts(
     )
 
     if not emails:
+        print("  📬 [Gmail Scanner] 0 new/unprocessed alert emails found.", flush=True)
         return 0
 
+    print(f"  📬 [Gmail Scanner] Found {len(emails)} alert emails to process.", flush=True)
     total_extracted = 0
     headers = {"User-Agent": "Mozilla/5.0 (compatible; RelentlessJobScout/1.0)"}
 
     async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
-        for mail in emails:
+        for idx, mail in enumerate(emails, 1):
             msg_id = mail["message_id"]
             subject = mail["subject"]
             sender = mail["sender"]
             html = mail["html"]
 
             extracted_links = extract_job_links_from_email_html(html)
+            li_ids = extracted_links.get("linkedin_job_ids", [])
+            ats_urls = extracted_links.get("direct_ats_urls", [])
+            print(
+                f"    ↳ [Email {idx}/{len(emails)}] '{subject[:45]}' (From: {sender[:30]}) -> {len(li_ids)} job links, {len(ats_urls)} direct ATS links",
+                flush=True,
+            )
             mail_extracted_jobs = 0
 
             # 1. Register any direct ATS boards found in the email
@@ -451,6 +464,7 @@ async def poll_gmail_alerts(
                         total_extracted += 1
 
             mark_email_processed(msg_id, subject, sender, mail_extracted_jobs)
+            print(f"      + Extracted {mail_extracted_jobs} new matching jobs from this email.", flush=True)
             if mail_extracted_jobs > 0:
                 logger.info(
                     "Gmail Alert [%s]: Extracted +%d jobs from email '%s'",
@@ -459,6 +473,10 @@ async def poll_gmail_alerts(
                     subject,
                 )
 
+    print(
+        f"  ✅ [Gmail Scanner Summary] Processed {len(emails)} emails -> +{total_extracted} total new jobs saved.",
+        flush=True,
+    )
     return total_extracted
 
 

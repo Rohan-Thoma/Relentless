@@ -142,9 +142,65 @@ Usage:
   python manage.py reset triage   # Medium Reset: clear Jev scores + clicks to re-score scraped jobs
   python manage.py reset all      # Factory Reset: wipe all scraped jobs and restart IDs at #1
   python manage.py eval           # Print live Precision@K, Wilson 95% CIs, and Brier calibration table
-  python manage.py run            # Start the 24/7 autonomous worker loop
+  python manage.py run            # Start autonomous worker loop (Scrapes FIRST, then leisurely ATS)
+  python manage.py run --scrape-only # Fast Mode: Scrapes Job boards & Gmail only (skips slow ATS)
+  python manage.py run --ats-only    # ATS Only: Scans only company ATS endpoints
+  python manage.py run --once        # Run single pipeline iteration and exit
+  python manage.py ingest         # Direct one-off ingestion run with same flags
 """
     )
+
+
+def _parse_run_flags(argv: list[str]) -> dict:
+    flags = {
+        "scrape_only": False,
+        "skip_ats": False,
+        "ats_only": False,
+        "sources": None,
+        "once": False,
+    }
+    i = 0
+    while i < len(argv):
+        arg = argv[i].lower()
+        if arg in ("--scrape-only", "--fast", "--no-ats", "--skip-ats"):
+            flags["scrape_only"] = True
+            flags["skip_ats"] = True
+        elif arg == "--ats-only":
+            flags["ats_only"] = True
+        elif arg == "--jobboards-only":
+            flags["sources"] = ["jobboards"]
+            flags["skip_ats"] = True
+            flags["scrape_only"] = True
+        elif arg == "--gmail-only":
+            flags["sources"] = ["gmail"]
+            flags["skip_ats"] = True
+            flags["scrape_only"] = True
+        elif arg == "--once":
+            flags["once"] = True
+        elif arg.startswith("--sources="):
+            flags["sources"] = [s.strip() for s in arg.split("=", 1)[1].split(",") if s.strip()]
+        elif arg == "--sources" and i + 1 < len(argv):
+            i += 1
+            flags["sources"] = [s.strip() for s in argv[i].split(",") if s.strip()]
+        elif arg in ("-h", "--help"):
+            print(
+                """
+Usage: python manage.py run [OPTIONS]
+
+Options:
+  --scrape-only, --fast, --no-ats   Prioritize and run ONLY JobSpy & Gmail scraping (skips slow ATS)
+  --ats-only                        Run ONLY company ATS endpoints (Greenhouse, Lever, Ashby, Workday)
+  --jobboards-only                  Run ONLY JobSpy job boards (Naukri, LinkedIn, Indeed, Google)
+  --gmail-only                      Run ONLY Gmail job alerts scanner
+  --sources <list>                  Comma-separated sources: jobboards,gmail
+  --once                            Run a single cycle and exit (great for testing)
+  -h, --help                        Show this message
+"""
+            )
+            sys.exit(0)
+        i += 1
+    return flags
+
 
 if __name__ == "__main__":
     cmd = sys.argv[1].lower() if len(sys.argv) > 1 else "help"
@@ -161,7 +217,13 @@ if __name__ == "__main__":
     elif cmd == "eval":
         run_evaluation()
     elif cmd == "run":
-        asyncio.run(run_loop())
+        run_args = _parse_run_flags(sys.argv[2:])
+        asyncio.run(run_loop(**run_args))
+    elif cmd == "ingest":
+        from src.ingestors.ats_poller import run_ingestion
+        run_args = _parse_run_flags(sys.argv[2:])
+        run_args.pop("once", None)
+        asyncio.run(run_ingestion(**run_args))
     elif cmd == "bot":
         print("🤖 Starting Telegram bot listener ONLY (independent of ingestion pipeline)...")
         asyncio.run(listen_for_button_clicks())
