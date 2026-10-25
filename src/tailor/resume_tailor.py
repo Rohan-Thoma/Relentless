@@ -7,12 +7,14 @@ import re
 import httpx
 import typst
 from dotenv import load_dotenv
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from src.db import get_connection
 from src.httpx_utils import post_with_retry
 from src.knowledge.store import get_store
 from src.settings_store import get_master_profile
+from src.tailor.ats_scorer import compute_ats_scorecard, format_scorecard_markdown
 
 load_dotenv()
 
@@ -399,6 +401,9 @@ Return ONLY valid JSON matching the exact same schema."""
     with open(pdf_path, "rb") as f:
         pdf_sha256 = hashlib.sha256(f.read()).hexdigest()
 
+    ats_scorecard = compute_ats_scorecard(job.get("jd_text") or "", PROFILE, validated)
+    scorecard_md = format_scorecard_markdown(ats_scorecard)
+
     diff_lines = [
         f"🎯 Tailored for: {job['title']} @ {job['company']}",
         f"🛡️ Jev Hallucination Risk: {hallucination_prob:.1%}",
@@ -407,7 +412,7 @@ Return ONLY valid JSON matching the exact same schema."""
         "📝 Surgical Changes Made:",
     ] + [f"  • {r}" for r in validated["change_rationale"]]
 
-    diff_summary = "\n".join(diff_lines)
+    diff_summary = f"{scorecard_md}\n\n" + "\n".join(diff_lines)
 
     if job.get("id"):
         try:
@@ -417,10 +422,11 @@ Return ONLY valid JSON matching the exact same schema."""
                     UPDATE jobs
                     SET tailored_pdf_path = %s,
                         tailored_pdf_sha256 = %s,
-                        tailored_diff = %s
+                        tailored_diff = %s,
+                        ats_scorecard = %s
                     WHERE id = %s;
                     """,
-                    (pdf_path, pdf_sha256, diff_summary, job["id"]),
+                    (pdf_path, pdf_sha256, diff_summary, Jsonb(ats_scorecard), job["id"]),
                 )
                 conn.commit()
         except Exception as e:
@@ -432,4 +438,5 @@ Return ONLY valid JSON matching the exact same schema."""
         "diff_summary": diff_summary,
         "hallucination_prob": hallucination_prob,
         "tailored": validated,
+        "ats_scorecard": ats_scorecard,
     }
