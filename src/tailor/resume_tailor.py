@@ -263,21 +263,28 @@ async def tailor_resume_for_job(job: dict, custom_instruction: str = "") -> dict
     llm_key = OPENAI_API_KEY
     llm_model = "gpt-4o-mini"
 
+    exp_instructions = []
+    for idx, exp in enumerate(PROFILE.get("experience", [])):
+        role_company = f"{exp.get('company', '')} - {exp.get('role', '')}".strip(" -")
+        num_bullets = len(exp.get("bullets", []))
+        exp_instructions.append(
+            f"   - For experience[{idx}] ({role_company}), generate {num_bullets} surgically tailored bullets preserving all key accomplishments without cutting down."
+        )
+    exp_instruction_str = "\n".join(exp_instructions)
+
     prompt = f"""You are an elite Staff AI/ML Technical Recruiter and Resume Architect.
 Your goal is to craft a deeply compelling, ATS-optimized, human-sounding resume for the candidate targeting {job['title']} at {job['company']}.
 
 HOW TO TAILOR INTELLIGENTLY (CRITICAL RULES):
 1. PRESERVE FULL BULLET DEPTH (DO NOT REDUCE BULLETS):
    - The candidate wants their complete, rich experience reflected. Do NOT prune or cut down the bullet points!
-   - For experience[0] (Kynea Solutions LLP), generate 5 surgically tailored bullets covering all projects (RAG chatbot, NLP intent/aerospace, CV container defect detection, VLM map extraction, composite draping platform).
-   - For experience[1] (Starinco - ML Engineer), generate 6 to 7 surgically tailored bullets covering all key projects (DeepSeek-VL2 OCR, vehicle speed detection, furnace billet/people recognition pilot, YOLOv8 deployment service, Jetson Nano/edge TensorRT, pipe layer counting, automated pipe calibration).
-   - For experience[2] (Starinco - Jr. ML Engineer), generate 4 to 6 surgically tailored bullets (forklift safety system, fire detection enhancement, transport management system, Tkinter/PyAutoGUI labelling tool, Jetson DeepFace, crowd detection).
+{exp_instruction_str}
 2. DO NOT WRITE TARGET JOB TITLE IN SUMMARY:
    - In `tailored_summary`, craft a 3-sentence high-impact executive summary that emphasizes the candidate's deep machine learning, GenAI, and computer vision expertise directly. DO NOT explicitly write the target job title or target company name inside the summary text.
 3. ACTUALLY REPHRASE AND REFRAME:
    - DO NOT just copy-paste bullets verbatim! Actively REPHRASE and REFRAME each bullet so its technical narrative, architectural verbs, and impact directly mirror what {job['company']} is looking for in the Job Description, while keeping the original facts and achievements true.
 4. FIX ALL TYPOS & GRAMMAR:
-   - Fix all raw profile typos (e.g., fix missing spaces like 'portal.Integrated' -> 'portal. Integrated', fix 'guvicorn' -> 'Gunicorn', 'open-cv' -> 'OpenCV', 'yolov8' -> 'YOLOv8', 'pygui' -> 'PyAutoGUI', 'atleast' -> 'at least').
+   - Fix all raw profile typos, missing spaces, inconsistent capitalization, and grammar issues.
 5. SMART DOMAIN NUANCE & ECOSYSTEM INFERENCE:
    - A real engineer who built production LangGraph/RAG/LLM systems naturally works with LLM observability/tracing (e.g., LangSmith, Langfuse), prompt evaluation, hybrid retrieval, chunking, and Guardrails.
    - A real engineer who built YOLOv8/TensorRT/ONNX/DeepStream pipelines naturally understands model quantization (FP16/INT8), NMS post-processing, frame batching, and edge latency profiling.

@@ -5,7 +5,7 @@ import pandas as pd
 from jobspy import scrape_jobs
 
 from src.config import load_config
-from src.ingestors.ats_poller import clean_html, insert_job, matches_basic_filters
+from src.ingestors.common import clean_html, insert_job, matches_basic_filters
 from src.ingestors.url_resolver import register_discovered_board
 from src.settings_store import get_master_profile
 

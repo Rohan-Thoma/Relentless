@@ -14,7 +14,7 @@ import httpx
 
 from src.config import load_config
 from src.db import get_connection
-from src.ingestors.ats_poller import clean_html, insert_job, matches_basic_filters
+from src.ingestors.common import clean_html, insert_job, matches_basic_filters
 from src.ingestors.url_resolver import (
     DIRECT_ATS_DOMAINS,
     register_discovered_board,

@@ -78,6 +78,13 @@ def _allow_example_profile() -> bool:
     return os.getenv("ALLOW_EXAMPLE_PROFILE", "").strip().lower() in ("1", "true", "yes")
 
 
+def load_example_profile() -> dict:
+    if os.path.exists(EXAMPLE_PROFILE_PATH):
+        with open(EXAMPLE_PROFILE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    raise ProfileNotConfigured(f"Example profile not found at {EXAMPLE_PROFILE_PATH}")
+
+
 def load_master_profile() -> dict:
     if os.path.exists(LOCAL_PROFILE_PATH):
         with open(LOCAL_PROFILE_PATH, "r", encoding="utf-8") as f:

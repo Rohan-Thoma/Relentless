@@ -1,15 +1,59 @@
 import json
 import logging
 import os
+import re
 
 import httpx
 
 from src.httpx_utils import post_with_retry
+from src.settings_store import (
+    ProfileNotConfigured,
+    get_master_profile,
+    load_example_profile,
+)
 
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+
+
+def resolve_candidate_profile(profile: dict | None = None) -> dict:
+    """
+    Ensures a valid candidate profile is available.
+    1. Uses passed profile if populated.
+    2. Falls back to get_master_profile() if configured.
+    3. Falls back to load_example_profile() if allowed/available.
+    4. Otherwise raises ProfileNotConfigured (no hardcoded credentials allowed).
+    """
+    if profile and isinstance(profile, dict) and (profile.get("name") or profile.get("application_defaults")):
+        # If application_defaults is missing, overlay example profile defaults
+        if not profile.get("application_defaults"):
+            try:
+                ex = load_example_profile()
+                profile["application_defaults"] = ex.get("application_defaults", {})
+            except Exception:
+                pass
+        return profile
+
+    try:
+        loaded = get_master_profile()
+        if loaded:
+            return loaded
+    except ProfileNotConfigured:
+        pass
+
+    try:
+        ex = load_example_profile()
+        if ex:
+            return ex
+    except Exception:
+        pass
+
+    raise ProfileNotConfigured(
+        "Candidate profile is required for form filling. Configure config/master_profile.json "
+        "or set ALLOW_EXAMPLE_PROFILE=1."
+    )
 
 
 async def dismiss_popups_and_open_form(page):
@@ -166,8 +210,45 @@ async def extract_form_schema(frame_or_page) -> list[dict]:
     return schema or []
 
 
+def _generate_motive_statement(job: dict, profile: dict) -> str:
+    """Synthesizes a tailored motive statement using the JD context and candidate profile."""
+    company = job.get("company") or "the company"
+    title = job.get("title") or "this role"
+    jd_text = (job.get("jd_text") or "").strip()
+
+    # Extract company domain / mission context from the JD if available
+    mission_snippet = ""
+    lines = [ln.strip() for ln in jd_text.splitlines() if ln.strip()]
+    for ln in lines[:10]:
+        if re.search(r"\b(mission|building|empower|innovat|revolution|leading|product)\b", ln, re.IGNORECASE):
+            mission_snippet = ln[:120].strip(" -:.")
+            break
+
+    summary = (
+        profile.get("experience_summary")
+        or profile.get("application_defaults", {}).get("current_title")
+        or "engineering experience"
+    )
+
+    if mission_snippet:
+        return (
+            f"I am excited to apply for the {title} role at {company}. "
+            f"Given your focus on {mission_snippet}, my background in {summary} "
+            f"positions me to make an immediate, high-ownership impact."
+        )
+
+    return (
+        f"I am eager to contribute to {company} as {title}. "
+        f"My background in {summary} directly aligns with the technical goals and engineering challenges "
+        f"outlined in the role, and I look forward to delivering measurable results for the team."
+    )
+
+
 def _heuristic_plan_fill(fields_schema: list[dict], job: dict, profile: dict) -> dict:
-    """Deterministic, robust heuristic fallback for offline testing or missing LLM keys."""
+    """
+    Deterministic heuristic mapper sourcing strictly from profile & application defaults.
+    Zero hardcoded personal data in code.
+    """
     app_defaults = profile.get("application_defaults") or {}
     name_str = profile.get("name") or app_defaults.get("full_name") or ""
     parts = name_str.split()
@@ -210,44 +291,44 @@ def _heuristic_plan_fill(fields_schema: list[dict], job: dict, profile: dict) ->
         elif "website" in key or "portfolio" in key:
             val = profile.get("github") or profile.get("linkedin")
 
-        # 2. Screening Defaults (India, CTC, Notice Period, Work Auth)
+        # 2. Screening Defaults (sourcing strictly from application_defaults / master profile)
         elif "notice" in key:
-            val = app_defaults.get("notice_period") or "30 days"
+            val = app_defaults.get("notice_period") or app_defaults.get("notice_period_days")
         elif "current" in key and ("ctc" in key or "salary" in key or "compensation" in key):
-            val = app_defaults.get("current_ctc_lpa") or "12"
+            val = app_defaults.get("current_ctc_lpa")
         elif ("expected" in key or "desired" in key) and ("ctc" in key or "salary" in key or "compensation" in key):
-            val = app_defaults.get("expected_ctc_lpa") or "24"
+            val = app_defaults.get("expected_ctc_lpa")
         elif "auth" in key or "legally" in key or "eligib" in key:
-            val = "Yes"
+            val = app_defaults.get("authorized_to_work_in_india") or "Yes"
         elif "sponsorship" in key or "visa" in key:
-            val = "No"
+            val = app_defaults.get("requires_visa_sponsorship") or "No"
         elif "relocat" in key:
             val = app_defaults.get("willing_to_relocate") or "Yes"
         elif "city" in key or "location" in key:
-            val = app_defaults.get("current_city") or profile.get("location") or "Hyderabad, India"
+            val = app_defaults.get("current_city") or profile.get("location")
         elif "country" in key:
-            val = app_defaults.get("country") or "India"
+            val = app_defaults.get("country")
         elif "company" in key or "organization" in key or "employer" in key:
             exp = profile.get("experience") or []
             val = app_defaults.get("current_company") or (exp[0].get("company") if exp else "")
         elif "title" in key or "designation" in key or "role" in key:
             exp = profile.get("experience") or []
-            val = app_defaults.get("current_title") or (exp[0].get("role") if exp else "Machine Learning Engineer")
+            val = app_defaults.get("current_title") or (exp[0].get("role") if exp else "")
         elif "experience" in key and ("total" in key or "year" in key):
-            val = app_defaults.get("total_experience_years") or "3.5"
+            val = app_defaults.get("total_experience_years") or app_defaults.get("relevant_experience_years")
         elif "degree" in key or "education" in key or "university" in key or "college" in key:
-            val = app_defaults.get("highest_education") or "Master of Technology (M.Tech), IIT Bhubaneswar"
+            edu = profile.get("education") or []
+            val = app_defaults.get("highest_education") or (edu[0].get("degree") if edu else "")
         elif "gender" in key:
-            val = app_defaults.get("gender") or "Male"
+            val = app_defaults.get("gender")
+        elif "veteran" in key:
+            val = app_defaults.get("veteran_status")
+        elif "disability" in key:
+            val = app_defaults.get("disability_status")
 
-        # 3. Textarea / Custom Essay Questions
+        # 3. Textarea / Custom Essay Questions (synthesized dynamically from JD & profile)
         elif tag == "textarea":
-            company = job.get("company", "the company")
-            role = job.get("title", "this position")
-            if "cover" in key or "note" in key:
-                val = f"I am excited to apply for the {role} role at {company}. With deep hands-on expertise in machine learning, PyTorch, and production AI architectures, I look forward to contributing immediately."
-            else:
-                val = f"I have 3.5+ years of production experience designing and deploying high-impact ML and computer vision systems. I am excited to bring my technical skills and ownership to {company} to drive innovative engineering solutions."
+            val = _generate_motive_statement(job, profile)
 
         # Match select options if val found
         if val is not None:
@@ -271,9 +352,12 @@ async def plan_form_fill_with_llm(fields_schema: list[dict], job: dict, profile:
     """
     Stage 3:
     Uses gpt-4o-mini (cost ~$0.0009 / form) to map fields_schema to profile + screening answers.
-    Falls back gracefully to heuristic plan when API keys are not present.
+    Leverages JD context and company details to craft authentic answers for essay questions.
+    Falls back cleanly to heuristic plan when API keys are not present.
     """
-    heuristic_plan = _heuristic_plan_fill(fields_schema, job, profile)
+    resolved_prof = resolve_candidate_profile(profile)
+    heuristic_plan = _heuristic_plan_fill(fields_schema, job, resolved_prof)
+
     api_key = OPENAI_API_KEY or OPENROUTER_API_KEY
     if not api_key or not fields_schema:
         return heuristic_plan
@@ -285,20 +369,27 @@ async def plan_form_fill_with_llm(fields_schema: list[dict], job: dict, profile:
     )
     model = "gpt-4o-mini"
 
-    app_defaults = profile.get("application_defaults") or {}
+    app_defaults = resolved_prof.get("application_defaults") or {}
     clean_profile = {
-        "name": profile.get("name"),
-        "email": profile.get("email"),
-        "phone": profile.get("phone"),
-        "location": profile.get("location"),
-        "linkedin": profile.get("linkedin"),
-        "github": profile.get("github"),
-        "core_skills": profile.get("core_skills", [])[:10],
+        "name": resolved_prof.get("name"),
+        "email": resolved_prof.get("email"),
+        "phone": resolved_prof.get("phone"),
+        "location": resolved_prof.get("location"),
+        "linkedin": resolved_prof.get("linkedin"),
+        "github": resolved_prof.get("github"),
+        "experience_summary": resolved_prof.get("experience_summary"),
+        "experience": resolved_prof.get("experience", [])[:2],
+        "core_skills": resolved_prof.get("core_skills", [])[:12],
         "application_defaults": app_defaults,
     }
 
     prompt = {
-        "job": {"company": job.get("company"), "title": job.get("title")},
+        "job": {
+            "company": job.get("company"),
+            "title": job.get("title"),
+            "jd_text_context": (job.get("jd_text") or "")[:2000],
+            "apply_url": job.get("apply_url"),
+        },
         "candidate_profile": clean_profile,
         "form_fields": fields_schema,
     }
@@ -316,9 +407,10 @@ async def plan_form_fill_with_llm(fields_schema: list[dict], job: dict, profile:
                             "role": "system",
                             "content": (
                                 "You are an intelligent Job Application Autofill Agent. "
-                                "Given a list of form fields and the candidate profile, generate a JSON mapping "
-                                "from field_id to the string value to fill or option value to select. "
-                                "For essay questions, provide a concise, professional 2-3 sentence answer based on the candidate's actual background. "
+                                "Given a list of form fields, candidate profile, and job description context, "
+                                "generate a JSON mapping from field_id to the exact string value to fill or option value to select. "
+                                "For essay / motivation questions (e.g. 'Why do you want to join?', 'Tell us about a project'): "
+                                "reference the company's mission/domain from the JD context and provide a professional, authentic 2-3 sentence answer. "
                                 "Return ONLY a JSON object: {\"field_0\": \"value\", ...}"
                             ),
                         },
@@ -333,7 +425,6 @@ async def plan_form_fill_with_llm(fields_schema: list[dict], job: dict, profile:
                 content = data["choices"][0]["message"]["content"]
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
-                    # Overlay LLM answers on top of heuristic plan
                     merged = dict(heuristic_plan)
                     merged.update(parsed)
                     return merged
@@ -352,9 +443,10 @@ async def smart_fill_form(page, job: dict, profile: dict) -> dict:
     3. Plan actions with LLM + heuristics
     4. Fill text inputs, selects, radios, and upload tailored PDF resume
     """
+    resolved_prof = resolve_candidate_profile(profile)
     target = await dismiss_popups_and_open_form(page)
     schema = await extract_form_schema(target)
-    plan = await plan_form_fill_with_llm(schema, job, profile)
+    plan = await plan_form_fill_with_llm(schema, job, resolved_prof)
 
     fields_filled = {}
 
