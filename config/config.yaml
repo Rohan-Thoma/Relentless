@@ -469,3 +469,17 @@ jobboards:
   results_wanted: 20
   hours_old: 72
 
+gmail_scanner:
+  lookback_days: 3
+  label: "professional-job_alerts"
+  sender_keywords:
+    - linkedin
+    - naukri
+    - indeed
+    - instahyre
+    - wellfound
+    - job
+    - hiring
+    - alert
+
+

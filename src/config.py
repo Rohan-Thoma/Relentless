@@ -49,11 +49,29 @@ class JobboardsConfig(BaseModel):
     hours_old: int = 72
 
 
+class GmailScannerConfig(BaseModel):
+    lookback_days: int = 3
+    label: str = "professional-job_alerts"
+    sender_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "linkedin",
+            "naukri",
+            "indeed",
+            "instahyre",
+            "wellfound",
+            "job",
+            "hiring",
+            "alert",
+        ]
+    )
+
+
 class AppConfig(BaseModel):
     candidate_preferences: CandidatePreferences = Field(default_factory=CandidatePreferences)
     ats_targets: ATSTargets = Field(default_factory=ATSTargets)
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
     jobboards: JobboardsConfig = Field(default_factory=JobboardsConfig)
+    gmail_scanner: GmailScannerConfig = Field(default_factory=GmailScannerConfig)
 
 
 _config_cache: dict[str, Any] = {"value": None, "file_mtime": None, "db_updated": None}

@@ -140,11 +140,21 @@ def insert_job(
     location: str,
     apply_url: str,
     jd_text: str,
+    original_source_url: str | None = None,
 ) -> bool:
     if conn is None:
         try:
             with get_connection() as c:
-                return insert_job(c, source_ats, company, title, location, apply_url, jd_text)
+                return insert_job(
+                    c,
+                    source_ats,
+                    company,
+                    title,
+                    location,
+                    apply_url,
+                    jd_text,
+                    original_source_url,
+                )
         except Exception as e:
             logger.warning("Could not insert job: %s", e)
             return False
@@ -155,12 +165,22 @@ def insert_job(
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO jobs (dedup_hash, source_ats, company, title, location, apply_url, jd_text, canonical_title)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO jobs (dedup_hash, source_ats, company, title, location, apply_url, jd_text, canonical_title, original_source_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (dedup_hash) DO NOTHING
             RETURNING id;
             """,
-            (dedup_hash, source_ats, company, title, location, apply_url, jd_text, canonical),
+            (
+                dedup_hash,
+                source_ats,
+                company,
+                title,
+                location,
+                apply_url,
+                jd_text,
+                canonical,
+                original_source_url,
+            ),
         )
         inserted = cur.fetchone() is not None
     conn.commit()
