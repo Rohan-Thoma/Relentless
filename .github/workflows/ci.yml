@@ -22,6 +22,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
+      - run: playwright install --with-deps chromium
       - run: ruff check .
       - env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/relentless
