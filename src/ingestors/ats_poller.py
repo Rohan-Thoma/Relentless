@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 
 import httpx
@@ -403,16 +404,92 @@ async def poll_arbeitnow(client: httpx.AsyncClient, conn) -> int:
     return added
 
 
+def load_discovered_boards(conn=None) -> dict[str, list]:
+    discovered: dict[str, list] = {
+        "greenhouse": [],
+        "lever": [],
+        "ashby": [],
+        "workday_cxs": [],
+        "smartrecruiters": [],
+        "recruitee": [],
+    }
+
+    def _query(c):
+        with c.cursor() as cur:
+            cur.execute(
+                "SELECT platform, slug, company, metadata FROM discovered_ats_boards WHERE active = TRUE;"
+            )
+            for row in cur.fetchall():
+                platform = row.get("platform")
+                slug = row.get("slug")
+                meta = row.get("metadata") or {}
+                if platform == "workday_cxs":
+                    if meta.get("tenant") and meta.get("wd_instance") and meta.get("site"):
+                        discovered["workday_cxs"].append({
+                            "company": meta.get("company")
+                            or row.get("company")
+                            or meta["tenant"].capitalize(),
+                            "tenant": meta["tenant"],
+                            "wd_instance": meta["wd_instance"],
+                            "site": meta["site"],
+                        })
+                    elif slug and ":" in slug:
+                        parts = slug.split(":")
+                        if len(parts) == 3:
+                            discovered["workday_cxs"].append({
+                                "company": row.get("company") or parts[0].capitalize(),
+                                "tenant": parts[0],
+                                "wd_instance": parts[1],
+                                "site": parts[2],
+                            })
+                elif platform in discovered and slug:
+                    discovered[platform].append(slug)
+
+    if conn is not None:
+        try:
+            _query(conn)
+        except Exception as e:
+            logger.warning("Could not query discovered boards: %s", e)
+    elif not os.getenv("PYTEST_CURRENT_TEST") or os.getenv("RELENTLESS_TEST_LIVE_DB"):
+        try:
+            with get_connection() as c:
+                _query(c)
+        except Exception as e:
+            logger.warning("Could not load discovered boards: %s", e)
+
+    return discovered
+
+
 async def run_ingestion():
     ats = _cfg().ats_targets
     targets = {
-        "greenhouse": ats.greenhouse,
-        "lever": ats.lever,
-        "ashby": ats.ashby,
+        "greenhouse": list(ats.greenhouse),
+        "lever": list(ats.lever),
+        "ashby": list(ats.ashby),
         "workday_cxs": [w.model_dump() for w in ats.workday_cxs],
-        "smartrecruiters": ats.smartrecruiters,
-        "recruitee": ats.recruitee,
+        "smartrecruiters": list(ats.smartrecruiters),
+        "recruitee": list(ats.recruitee),
     }
+
+    # Merge dynamically discovered boards
+    discovered = load_discovered_boards()
+    for plat in ("greenhouse", "lever", "ashby", "smartrecruiters", "recruitee"):
+        existing_set = set(targets[plat])
+        for slug in discovered.get(plat, []):
+            if slug not in existing_set:
+                targets[plat].append(slug)
+                existing_set.add(slug)
+
+    existing_wd_keys = {
+        (w.get("tenant"), w.get("wd_instance"), w.get("site"))
+        for w in targets["workday_cxs"]
+    }
+    for w in discovered.get("workday_cxs", []):
+        wd_key = (w.get("tenant"), w.get("wd_instance"), w.get("site"))
+        if wd_key not in existing_wd_keys:
+            targets["workday_cxs"].append(w)
+            existing_wd_keys.add(wd_key)
+
     headers = {"User-Agent": "Mozilla/5.0 (compatible; RelentlessJobScout/1.0)"}
     sem = asyncio.Semaphore(10)
 
@@ -449,8 +526,33 @@ async def run_ingestion():
         results = await asyncio.gather(*tasks, return_exceptions=True)
         total_new = sum(r for r in results if isinstance(r, int))
 
+    # Ingest from JobSpy job boards
+    try:
+        from src.ingestors.jobboards_poller import poll_jobboards
+
+        jb_new = await poll_jobboards()
+        print(f"  [JobSpy] Direct job boards: +{jb_new} new matching jobs")
+        if isinstance(jb_new, int):
+            total_new += jb_new
+    except Exception as e:
+        logger.warning("JobSpy ingestion failed: %s", e)
+
+    # Ingest from Gmail job alerts
+    try:
+        from src.ingestors.gmail_ingestor import poll_gmail_alerts
+
+        gmail_new = await poll_gmail_alerts()
+        print(f"  [Gmail Alerts] Email parser: +{gmail_new} new matching jobs")
+        if isinstance(gmail_new, int):
+            total_new += gmail_new
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning("Gmail alert scanner failed: %s", e)
+
     print(f"\n🚀 Ingestion complete! {total_new} brand-new jobs saved to Neon PostgreSQL.")
     return total_new
+
 
 
 if __name__ == "__main__":

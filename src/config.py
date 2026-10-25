@@ -41,10 +41,19 @@ class AutomationConfig(BaseModel):
     allowed_apply_domains: list[str] = Field(default_factory=list)
 
 
+class JobboardsConfig(BaseModel):
+    sites: list[str] = Field(default_factory=lambda: ["naukri", "linkedin", "indeed", "google"])
+    search_terms: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
+    results_wanted: int = 20
+    hours_old: int = 72
+
+
 class AppConfig(BaseModel):
     candidate_preferences: CandidatePreferences = Field(default_factory=CandidatePreferences)
     ats_targets: ATSTargets = Field(default_factory=ATSTargets)
     automation: AutomationConfig = Field(default_factory=AutomationConfig)
+    jobboards: JobboardsConfig = Field(default_factory=JobboardsConfig)
 
 
 _config_cache: dict[str, Any] = {"value": None, "file_mtime": None, "db_updated": None}

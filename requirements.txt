@@ -12,3 +12,4 @@ langgraph-checkpoint-postgres
 groq
 typst
 fastmcp
+python-jobspy

@@ -297,6 +297,74 @@ ats_targets:
     tenant: adobe
     wd_instance: wd5
     site: external_experienced
+  - company: Qualcomm
+    tenant: qualcomm
+    wd_instance: wd5
+    site: External
+  - company: Mastercard
+    tenant: mastercard
+    wd_instance: wd1
+    site: CorporateCareers
+  - company: ServiceNow
+    tenant: servicenow
+    wd_instance: wd1
+    site: External
+  - company: Dell
+    tenant: dell
+    wd_instance: wd1
+    site: External
+  - company: Cisco
+    tenant: cisco
+    wd_instance: wd10
+    site: External
+  - company: Intel
+    tenant: intel
+    wd_instance: wd1
+    site: External
+  - company: PayPal
+    tenant: paypal
+    wd_instance: wd1
+    site: jobs
+  - company: Morgan Stanley
+    tenant: morganstanley
+    wd_instance: wd5
+    site: MS_Careers
+  - company: Target
+    tenant: target
+    wd_instance: wd1
+    site: targetcareers
+  - company: Walmart
+    tenant: walmart
+    wd_instance: wd5
+    site: walmartcareers
+  - company: Wells Fargo
+    tenant: wellsfargo
+    wd_instance: wd1
+    site: WellsFargoJobs
+  - company: Fidelity
+    tenant: fmr
+    wd_instance: wd1
+    site: fidelity
+  - company: Autodesk
+    tenant: autodesk
+    wd_instance: wd1
+    site: Ext
+  - company: Micron
+    tenant: micron
+    wd_instance: wd1
+    site: External
+  - company: Texas Instruments
+    tenant: ti
+    wd_instance: wd1
+    site: External
+  - company: AstraZeneca
+    tenant: astrazeneca
+    wd_instance: wd3
+    site: Careers
+  - company: Boeing
+    tenant: boeing
+    wd_instance: wd1
+    site: External
   smartrecruiters:
   - LinkedIn3
   - ServiceNow
@@ -382,3 +450,22 @@ automation_presets:
     notes: Aggressive scanning. Low threshold, 24h cooldown, allows moderate tiers
       and up to 2 free-text questions. Use with caution. Toggle apply_mode to LIVE
       for real submissions.
+
+jobboards:
+  sites:
+    - naukri
+    - linkedin
+    - indeed
+    - google
+  search_terms:
+    - "Machine Learning Engineer"
+    - "AI Engineer"
+    - "Computer Vision Engineer"
+    - "LLM Engineer"
+  locations:
+    - "Hyderabad, India"
+    - "Bengaluru, India"
+    - "India"
+  results_wanted: 20
+  hours_old: 72
+
