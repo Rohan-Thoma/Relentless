@@ -11,3 +11,4 @@ config/master_profile.json
 .neon
 node_modules/
 agent_scratch_pad/
+.vscode/settings.json
