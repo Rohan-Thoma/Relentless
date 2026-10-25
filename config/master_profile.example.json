@@ -39,5 +39,27 @@
       "institution": "Institute of Technology",
       "dates": "Graduated"
     }
-  ]
+  ],
+  "application_defaults": {
+    "first_name": "Alex",
+    "last_name": "Developer",
+    "full_name": "Alex Developer",
+    "current_company": "Example Tech Corp",
+    "current_title": "AI & Backend Engineer",
+    "total_experience_years": "3.5",
+    "relevant_experience_years": "3.5",
+    "current_city": "Hyderabad, India",
+    "country": "India",
+    "willing_to_relocate": "Yes",
+    "authorized_to_work_in_india": "Yes",
+    "requires_visa_sponsorship": "No",
+    "notice_period": "30 days (Negotiable / Immediate)",
+    "notice_period_days": "30",
+    "current_ctc_lpa": "12",
+    "expected_ctc_lpa": "24 (Negotiable)",
+    "highest_education": "B.Tech in Computer Science & Engineering",
+    "gender": "Decline to self-identify",
+    "veteran_status": "I am not a protected veteran",
+    "disability_status": "No, I do not have a disability"
+  }
 }

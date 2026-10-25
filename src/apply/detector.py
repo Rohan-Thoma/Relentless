@@ -2,6 +2,8 @@ import logging
 
 from playwright.async_api import async_playwright
 
+from src.apply.llm_form_agent import dismiss_popups_and_open_form
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,7 +92,7 @@ async def _analyze_page_dom(page) -> tuple[str, str]:
         return ("CAPTCHA", "blocking captcha challenge detected")
     if info["needsLogin"]:
         return ("NEEDS_LOGIN", "login wall detected (password required before form)")
-    if info["requiredEssayCount"] > 0:
+    if info["requiredEssayCount"] > 3:
         return ("COMPLEX", f"{info['requiredEssayCount']} required essay question(s) present")
     if info["totalVisibleInputs"] > 30:
         return ("COMPLEX", f"too many form fields ({info['totalVisibleInputs']})")
@@ -108,18 +110,20 @@ async def classify(url: str):
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await page.goto(url, timeout=30000)
-            status, reason = await _analyze_page_dom(page)
+            target = await dismiss_popups_and_open_form(page)
+            status, reason = await _analyze_page_dom(target)
 
             # If no direct form on landing page, check if there's an "Apply" button/link that opens the form
             if status == "NEEDS_REVIEW":
-                apply_btn = await page.query_selector(
+                apply_btn = await target.query_selector(
                     "a:has-text('Apply'), button:has-text('Apply'), [role=button]:has-text('Apply')"
                 )
                 if apply_btn:
                     try:
                         await apply_btn.click()
                         await page.wait_for_timeout(1500)
-                        status, reason = await _analyze_page_dom(page)
+                        target = await dismiss_popups_and_open_form(page)
+                        status, reason = await _analyze_page_dom(target)
                     except Exception:
                         pass
 
