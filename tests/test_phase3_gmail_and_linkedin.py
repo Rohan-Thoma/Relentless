@@ -132,3 +132,45 @@ async def test_poll_gmail_alerts_flow(monkeypatch):
     assert inserted_records[0][1]["original_source_url"] == "https://www.linkedin.com/jobs/view/987654321"
     assert "<alert-123@linkedin.com>" in processed_records
     assert captured_sync_kwargs.get("gmail_label") == "professional-job_alerts"
+
+
+
+def test_find_imap_folder_matching():
+    from unittest.mock import MagicMock
+    from src.ingestors.gmail_ingestor import _find_imap_folder
+
+    mock_mail = MagicMock()
+    mock_mail.list.return_value = (
+        "OK",
+        [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\HasChildren) "/" "Professional"',
+            b'(\\HasNoChildren) "/" "Professional/Job_Alerts"',
+        ],
+    )
+    assert _find_imap_folder(mock_mail, "professional-job_alerts") == "Professional/Job_Alerts"
+    assert _find_imap_folder(mock_mail, "Professional/Job_Alerts") == "Professional/Job_Alerts"
+    assert _find_imap_folder(mock_mail, "non-existent") is None
+
+
+def test_fetch_alert_emails_sync_strict_label_enforcement(monkeypatch):
+    import imaplib
+    from unittest.mock import MagicMock
+    from src.ingestors.gmail_ingestor import fetch_alert_emails_sync
+
+    mock_mail = MagicMock()
+    # Let select fail or return empty
+    mock_mail.select.return_value = ("NO", [b"Mailbox not found"])
+    mock_mail.list.return_value = ("OK", [b'(\\HasNoChildren) "/" "INBOX"'])
+    mock_mail.uid.return_value = ("OK", [b""])
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host, port: mock_mail)
+
+    emails = fetch_alert_emails_sync(
+        "test@example.com",
+        "secret",
+        lookback_days=3,
+        gmail_label="professional-job_alerts",
+    )
+    # Must immediately return empty list and NOT fall back to INBOX
+    assert emails == []

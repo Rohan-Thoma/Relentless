@@ -256,18 +256,52 @@ async def fetch_linkedin_guest_job(
         return None
 
 
+def _find_imap_folder(mail: imaplib.IMAP4_SSL, target_label: str) -> str | None:
+    """Finds exact IMAP folder name matching label, handling nested folder slashes/hyphens."""
+    try:
+        status, folders = mail.list()
+        if status != "OK" or not folders:
+            return None
+        clean = target_label.strip().strip('"').lower()
+        variants = {clean, clean.replace("-", "/"), clean.replace("/", "-")}
+        for f_entry in folders:
+            entry_str = f_entry.decode("utf-8", errors="replace") if isinstance(f_entry, bytes) else str(f_entry)
+            m = re.search(r'\((?P<flags>[^)]*)\)\s+"(?P<delim>[^"]+)"\s+(?P<name>.*)', entry_str)
+            if m:
+                fn = m.group("name").strip().strip('"')
+                fn_low = fn.lower()
+                if fn_low in variants:
+                    return fn
+                for v in variants:
+                    if fn_low.endswith(("/" + v, "-" + v)):
+                        return fn
+    except Exception as e:
+        logger.debug("Error listing IMAP folders: %s", e)
+    return None
+
+
 def fetch_alert_emails_sync(
     gmail_address: str,
     gmail_password: str,
     lookback_days: int = 3,
     sender_keywords: list[str] | None = None,
-    gmail_label: str | None = "professional-job_alerts",
+    gmail_label: str | None = None,
 ) -> list[dict]:
     keywords = [k.lower() for k in (sender_keywords or [])]
     emails = []
 
     cutoff_dt = datetime.now(UTC) - timedelta(days=lookback_days)
     since_date = cutoff_dt.strftime("%d-%b-%Y")
+
+    if gmail_label is None:
+        try:
+            cfg = load_config()
+            scanner_cfg = getattr(cfg, "gmail_scanner", None)
+            gmail_label = os.getenv("GMAIL_LABEL", "").strip() or (
+                scanner_cfg.label if scanner_cfg else "professional-job_alerts"
+            )
+        except Exception:
+            gmail_label = "professional-job_alerts"
 
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
@@ -281,29 +315,55 @@ def fetch_alert_emails_sync(
             try:
                 status_box, _ = mail.select('"[Gmail]/All Mail"', readonly=True)
                 if status_box != "OK":
+                    status_box, _ = mail.select("[Gmail]/All Mail", readonly=True)
+                if status_box != "OK":
                     mail.select("INBOX", readonly=True)
-                raw_query = f"label:{gmail_label} newer_than:{lookback_days}d"
-                status, data = mail.uid("search", None, "X-GM-RAW", raw_query)
-                if status == "OK" and data and data[0]:
-                    uids = data[0].split()
-                    is_labeled_search = True
+
+                label_candidates = [gmail_label]
+                if "-" in gmail_label:
+                    label_candidates.append(gmail_label.replace("-", "/"))
+
+                for lc in label_candidates:
+                    raw_query = f"label:{lc} newer_than:{lookback_days}d"
+                    # In Gmail IMAP, the X-GM-RAW query argument MUST be enclosed in quotes
+                    status, data = mail.uid("search", None, "X-GM-RAW", f'"{raw_query}"')
+                    if status == "OK" and data and data[0]:
+                        uids = data[0].split()
+                        is_labeled_search = True
+                        break
             except Exception as e:
                 logger.debug("Gmail X-GM-RAW label search failed: %s", e)
 
             # Try selecting the label folder directly with SINCE date
             if not uids:
                 try:
-                    status_box, _ = mail.select(f'"{gmail_label}"', readonly=True)
+                    matched_folder = _find_imap_folder(mail, gmail_label) or gmail_label
+                    status_box, _ = mail.select(f'"{matched_folder}"', readonly=True)
+                    if status_box != "OK":
+                        status_box, _ = mail.select(matched_folder, readonly=True)
                     if status_box == "OK":
                         status, data = mail.uid("search", None, f'(SINCE "{since_date}")')
                         if status == "OK" and data and data[0]:
                             uids = data[0].split()
                             is_labeled_search = True
                 except Exception as e:
-                    logger.debug("Selecting mailbox '%s' failed: %s", gmail_label, e)
+                    logger.debug("Selecting mailbox for label '%s' failed: %s", gmail_label, e)
 
-        # 2. Fallback to INBOX SINCE search if no label search succeeded
-        if not uids:
+            # Strict configuration enforcement: If a label is configured, NEVER search inbox
+            if not uids:
+                logger.info(
+                    "Gmail Scanner: 0 emails found matching label '%s' in the last %d days.",
+                    gmail_label,
+                    lookback_days,
+                )
+                try:
+                    mail.logout()
+                except Exception:
+                    pass
+                return []
+
+        # 2. Only if NO label was configured in settings, fall back to INBOX SINCE search
+        else:
             mail.select("INBOX", readonly=True)
             status, data = mail.uid("search", None, f'(SINCE "{since_date}")')
             if status == "OK" and data and data[0]:
