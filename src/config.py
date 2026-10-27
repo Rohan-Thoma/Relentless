@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import time
 from typing import Any
 
 import yaml
@@ -52,6 +53,8 @@ class JobboardsConfig(BaseModel):
 class GmailScannerConfig(BaseModel):
     lookback_days: int = 3
     label: str = "professional-job_alerts"
+    max_job_age_hours: int = 96
+    poll_interval_minutes: int = 20
     sender_keywords: list[str] = Field(
         default_factory=lambda: [
             "linkedin",
@@ -72,6 +75,8 @@ class IngestionConfig(BaseModel):
     enable_jobboards: bool = True
     enable_gmail: bool = True
     enable_ats: bool = True
+    max_job_age_days: int = 7
+    triage_concurrency: int = 3
 
 
 class AppConfig(BaseModel):
@@ -83,7 +88,13 @@ class AppConfig(BaseModel):
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
 
 
-_config_cache: dict[str, Any] = {"value": None, "file_mtime": None, "db_updated": None}
+CONFIG_DB_CHECK_TTL = 120.0
+_config_cache: dict[str, Any] = {
+    "value": None,
+    "file_mtime": None,
+    "db_updated": None,
+    "checked_at": 0.0,
+}
 
 
 def _file_mtime(path: str) -> float | None:
@@ -108,7 +119,17 @@ def _db_updated_at() -> str | None:
 
 
 def load_config(force: bool = False) -> AppConfig:
+    now = time.monotonic()
     fm = _file_mtime("config/config.yaml")
+
+    if (
+        not force
+        and _config_cache["value"] is not None
+        and _config_cache["file_mtime"] == fm
+        and (now - _config_cache["checked_at"]) < CONFIG_DB_CHECK_TTL
+    ):
+        return _config_cache["value"]
+
     du = _db_updated_at()
     if (
         not force
@@ -116,6 +137,7 @@ def load_config(force: bool = False) -> AppConfig:
         and _config_cache["file_mtime"] == fm
         and _config_cache["db_updated"] == du
     ):
+        _config_cache["checked_at"] = now
         return _config_cache["value"]
 
     # file fallback
@@ -165,9 +187,15 @@ def load_config(force: bool = False) -> AppConfig:
     _config_cache["value"] = cfg
     _config_cache["file_mtime"] = fm
     _config_cache["db_updated"] = du
+    _config_cache["checked_at"] = now
     return cfg
 
 
 def invalidate_config():
     global _config_cache
-    _config_cache = {"value": None, "file_mtime": None, "db_updated": None}
+    _config_cache = {
+        "value": None,
+        "file_mtime": None,
+        "db_updated": None,
+        "checked_at": 0.0,
+    }

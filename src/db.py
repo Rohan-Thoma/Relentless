@@ -119,6 +119,28 @@ def close_pool():
         _POOL = None
 
 
+BOT_ADVISORY_LOCK_ID = 849201743
+
+
+def try_acquire_advisory_lock(lock_id: int = BOT_ADVISORY_LOCK_ID):
+    """Returns an open autocommit connection holding the session lock, or None if held elsewhere."""
+    dsn = _dsn()
+    if not dsn:
+        return None
+    try:
+        conn = psycopg.connect(dsn, autocommit=True, connect_timeout=10)
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s) AS locked;", (lock_id,))
+            row = cur.fetchone()
+            locked = bool(row[0] if isinstance(row, tuple) else row["locked"])
+        if locked:
+            return conn
+        conn.close()
+    except Exception:
+        pass
+    return None
+
+
 def make_dedup_hash(company: str, title: str, location: str) -> str:
     norm = f"{company.strip().lower()}|{title.strip().lower()}|{location.strip().lower()}"
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
@@ -165,6 +187,11 @@ def reset_database(mode: str = "labels") -> str:
                 cur.execute(
                     "TRUNCATE TABLE jobs, apply_events, apply_confirmations, telegram_message_jobs, outcome_events RESTART IDENTITY CASCADE;"
                 )
+                try:
+                    from src.ingestors.dedup_cache import CACHE
+                    CACHE.reset()
+                except Exception:
+                    pass
                 msg = "💥 Factory Reset complete: All jobs wiped and ID counter reset to #1."
             else:
                 raise ValueError("Invalid reset mode. Choose 'labels', 'triage', or 'all'.")
@@ -198,47 +225,35 @@ def get_pending_action(raw_token: str):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT token, kind, payload, expires_at FROM pending_actions WHERE token = %s;",
+                "SELECT * FROM pending_actions WHERE token = %s AND expires_at > NOW();",
                 (token_hash,),
             )
-            row = cur.fetchone()
-    if not row:
-        return None
-    expires = row["expires_at"]
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=UTC)
-    if expires < datetime.now(UTC):
-        return None
-    return row
+            return cur.fetchone()
 
 
 def consume_pending_action(raw_token: str, kind: str | None = None):
-    """Consume a pending action if valid and unexpired. Returns row dict or None."""
+    """Atomically fetch and delete a pending action if valid and not expired. Returns row or None."""
     token_hash = _hash_token(raw_token)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT kind, payload, expires_at FROM pending_actions WHERE token = %s;",
+                """
+                DELETE FROM pending_actions
+                WHERE token = %s AND expires_at > NOW()
+                RETURNING id, kind, payload, created_at, expires_at;
+                """,
                 (token_hash,),
             )
             row = cur.fetchone()
-            if not row:
+            if row is None:
                 return None
             if kind is not None and row["kind"] != kind:
                 return None
-            expires = row["expires_at"]
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=UTC)
-            if expires < datetime.now(UTC):
-                cur.execute("DELETE FROM pending_actions WHERE token = %s;", (token_hash,))
-                conn.commit()
-                return None
-            cur.execute("DELETE FROM pending_actions WHERE token = %s;", (token_hash,))
             conn.commit()
-    return row
+            return row
 
 
-def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload=None, ttl_seconds: int = 600, created_by: str | None = None):
+def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload: dict | None = None, ttl_seconds: int = 300):
     raw = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw)
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
@@ -246,10 +261,11 @@ def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload=None, t
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO apply_confirmations (token_hash, job_id, kind, payload, created_by, expires_at)
-                VALUES (%s, %s, %s, %s, %s, %s);
+                INSERT INTO apply_confirmations (token, job_id, kind, payload, expires_at)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id;
                 """,
-                (token_hash, job_id, kind, Jsonb(payload or {}), created_by, expires_at),
+                (token_hash, job_id, kind, Jsonb(payload or {}), expires_at),
             )
         conn.commit()
     return raw, expires_at
@@ -260,13 +276,16 @@ def consume_apply_confirmation(raw_token: str, job_id: int | None = None, kind: 
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, job_id, kind, payload, expires_at, status FROM apply_confirmations WHERE token_hash = %s;",
+                """
+                SELECT id, job_id, kind, payload, expires_at, status
+                FROM apply_confirmations
+                WHERE token = %s AND status = 'PENDING'
+                FOR UPDATE;
+                """,
                 (token_hash,),
             )
             row = cur.fetchone()
-            if not row:
-                return None
-            if row.get("status") != "PENDING":
+            if row is None:
                 return None
             if kind is not None and row["kind"] != kind:
                 return None

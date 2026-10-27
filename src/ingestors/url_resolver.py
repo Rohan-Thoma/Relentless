@@ -123,6 +123,18 @@ def register_discovered_board(url: str, conn=None) -> bool:
     if not info:
         return False
 
+    platform = info["platform"]
+    slug = info["slug"]
+
+    try:
+        from src.ingestors.dedup_cache import CACHE
+
+        if CACHE.hydrated and not os.getenv("PYTEST_CURRENT_TEST"):
+            if CACHE.has_board(platform, slug):
+                return False
+    except Exception:
+        pass
+
     def _execute(c):
         with c.cursor() as cur:
             metadata_json = json.dumps(info.get("metadata", {}))
@@ -133,10 +145,17 @@ def register_discovered_board(url: str, conn=None) -> bool:
                 ON CONFLICT (platform, slug) DO NOTHING
                 RETURNING id;
                 """,
-                (info["platform"], info["slug"], info.get("company"), metadata_json),
+                (platform, slug, info.get("company"), metadata_json),
             )
             inserted = cur.fetchone() is not None
             c.commit()
+            if inserted:
+                try:
+                    from src.ingestors.dedup_cache import CACHE
+
+                    CACHE.record_board(platform, slug)
+                except Exception:
+                    pass
             return inserted
 
     if conn is not None:

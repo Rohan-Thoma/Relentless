@@ -18,7 +18,16 @@ def is_near_dup(conn, company: str, title: str) -> bool:
     if not norm:
         return False
     sorted_norm = " ".join(sorted(norm.split()))
+
     if conn is None:
+        try:
+            from src.ingestors.dedup_cache import CACHE
+
+            if CACHE.hydrated:
+                return CACHE.is_near_dup_cached(company, sorted_norm)
+        except Exception:
+            pass
+
         try:
             from src.db import get_connection
 

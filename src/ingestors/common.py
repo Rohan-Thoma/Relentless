@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import logging
 import re
 
@@ -8,6 +9,13 @@ from src.db import get_connection, make_dedup_hash
 from src.dedupe import is_near_dup, normalize_title
 
 logger = logging.getLogger(__name__)
+
+_JOB_INSERTED_HOOK: Callable[[dict], None] | None = None
+
+
+def set_job_inserted_hook(hook: Callable[[dict], None] | None) -> None:
+    global _JOB_INSERTED_HOOK
+    _JOB_INSERTED_HOOK = hook
 
 
 def _cfg():
@@ -118,6 +126,15 @@ def matches_basic_filters(title: str, location: str) -> bool:
 def job_exists(conn, dedup_hash: str) -> bool:
     if conn is None:
         try:
+            from src.ingestors.dedup_cache import CACHE
+
+            if CACHE.hydrated:
+                if CACHE.has_hash(dedup_hash):
+                    return True
+        except Exception:
+            pass
+
+        try:
             with get_connection() as c, c.cursor() as cur:
                 cur.execute("SELECT 1 FROM jobs WHERE dedup_hash = %s", (dedup_hash,))
                 return cur.fetchone() is not None
@@ -138,7 +155,23 @@ def insert_job(
     jd_text: str,
     original_source_url: str | None = None,
 ) -> bool:
+    dedup_hash = make_dedup_hash(company, title, location)
+
     if conn is None:
+        try:
+            from src.ingestors.dedup_cache import CACHE
+
+            if CACHE.hydrated:
+                if CACHE.has_hash(dedup_hash):
+                    return False
+                norm = normalize_title(title)
+                if norm:
+                    sorted_norm = " ".join(sorted(norm.split()))
+                    if CACHE.is_near_dup_cached(company, sorted_norm):
+                        return False
+        except Exception:
+            pass
+
         try:
             with get_connection() as c:
                 return insert_job(
@@ -154,7 +187,7 @@ def insert_job(
         except Exception as e:
             logger.warning("Could not insert job: %s", e)
             return False
-    dedup_hash = make_dedup_hash(company, title, location)
+
     if is_near_dup(conn, company, title):
         return False
     canonical = normalize_title(title)
@@ -178,7 +211,35 @@ def insert_job(
                 original_source_url,
             ),
         )
-        inserted = cur.fetchone() is not None
-    conn.commit()
-    return inserted
+        row = cur.fetchone()
+        inserted_id = row["id"] if isinstance(row, dict) else (row[0] if row else None)
 
+    conn.commit()
+
+    if inserted_id is not None:
+        try:
+            from src.ingestors.dedup_cache import CACHE
+
+            CACHE.record_job(dedup_hash, company, canonical)
+        except Exception:
+            pass
+
+        if _JOB_INSERTED_HOOK is not None:
+            job_dict = {
+                "id": inserted_id,
+                "dedup_hash": dedup_hash,
+                "source_ats": source_ats,
+                "company": company,
+                "title": title,
+                "location": location,
+                "apply_url": apply_url,
+                "jd_text": jd_text,
+                "canonical_title": canonical,
+                "original_source_url": original_source_url,
+            }
+            try:
+                _JOB_INSERTED_HOOK(job_dict)
+            except Exception as e:
+                logger.warning("Error in _JOB_INSERTED_HOOK: %s", e)
+        return True
+    return False
