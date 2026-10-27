@@ -1,5 +1,5 @@
+# Core runtime
 httpx
-playwright
 pyyaml
 python-dotenv
 pydantic
@@ -7,9 +7,33 @@ psycopg[binary]
 psycopg-pool
 pgvector
 beautifulsoup4
-langgraph
-langgraph-checkpoint-postgres
-groq
 typst
 fastmcp
+
+# Job Ingestion & Scraping
+pandas
 python-jobspy
+playwright
+
+# AI / Agents
+groq
+langgraph
+langgraph-checkpoint-postgres
+
+# Testing & Development (Merged from requirements-dev.txt)
+pytest
+pytest-asyncio
+ruff
+respx
+
+# AI / Agents
+groq
+langgraph
+langgraph-checkpoint-postgres
+
+# Testing & Development (Merged from requirements-dev.txt)
+pytest
+pytest-asyncio
+ruff
+respx
+
