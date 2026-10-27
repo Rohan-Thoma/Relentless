@@ -8,6 +8,8 @@ load_dotenv(override=True)
 
 
 def _db_available():
+    if not os.getenv("RELENTLESS_TEST_LIVE_DB"):
+        return False
     try:
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1;")

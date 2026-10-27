@@ -1,4 +1,4 @@
-
+import os
 import pytest
 
 from dotenv import load_dotenv
@@ -14,6 +14,8 @@ from src.db import (
 
 
 def _db_available():
+    if not os.getenv("RELENTLESS_TEST_LIVE_DB"):
+        return False
     try:
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1;")
