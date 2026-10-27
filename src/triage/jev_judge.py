@@ -1,12 +1,13 @@
 import asyncio
+from collections import Counter
 import logging
 import math
 import os
 import re
-from collections import Counter
+import time
 
-import httpx
 from dotenv import load_dotenv
+import httpx
 
 from src.calibrate import apply_calibration, fit_calibration
 from src.db import get_connection
@@ -36,10 +37,12 @@ def _build_jd_description(job: dict, profile: dict) -> str:
         parts.append("Requirements: " + structured["requirements"][:1500])
     if structured.get("responsibilities"):
         parts.append("Responsibilities: " + structured["responsibilities"][:1500])
-    summary = "\\n".join(parts)
-    return (summary + "\\n\\n" + jd_text[:6000]).strip()
+    summary = "\n".join(parts)
+    return (summary + "\n\n" + jd_text[:6000]).strip()
+
 
 SCORE_TIER_LABELS = ["reject", "weak_fit", "moderate_fit", "strong_fit", "dream_role"]
+
 
 def compute_baseline_similarity(jd_text: str) -> float:
     """Computes a fast baseline cosine similarity between profile skills and JD text for the Eval Harness."""
@@ -58,6 +61,7 @@ def compute_baseline_similarity(jd_text: str) -> float:
     norm_a = math.sqrt(sum(v * v for v in vec_a.values()))
     norm_b = math.sqrt(sum(v * v for v in vec_b.values()))
     return round(dot / (norm_a * norm_b), 4) if (norm_a and norm_b) else 0.0
+
 
 async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
     """
@@ -177,30 +181,122 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
         "jev_persona": persona,
     }
 
-async def run_triage(batch_limit: int = 100):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, company, title, location, jd_text FROM jobs WHERE triage_passed IS NULL LIMIT %s;",
-                (batch_limit,),
-            )
-            unscored_jobs = cur.fetchall()
 
+_CAL_CACHE = {"model": None, "ts": 0.0}
+_CAL_LOCK = asyncio.Lock()
+
+
+def _fetch_calibration_model_sync():
+    try:
+        with get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT jev_fit_prob, human_action FROM jobs WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM') AND jev_fit_prob IS NOT NULL;"
             )
             labeled_rows = cur.fetchall()
+        pairs = [
+            (r["jev_fit_prob"], 1 if r["human_action"] == "APPLIED" else 0)
+            for r in labeled_rows
+            if r["jev_fit_prob"] is not None
+        ]
+        return fit_calibration(pairs, min_n=20)
+    except Exception:
+        return None
 
+
+async def get_cached_calibration_model(ttl_seconds: float = 300.0):
+    now = time.monotonic()
+    if _CAL_CACHE["model"] is not None and (now - _CAL_CACHE["ts"]) < ttl_seconds:
+        return _CAL_CACHE["model"]
+    async with _CAL_LOCK:
+        if _CAL_CACHE["model"] is not None and (now - _CAL_CACHE["ts"]) < ttl_seconds:
+            return _CAL_CACHE["model"]
+        model = await asyncio.to_thread(_fetch_calibration_model_sync)
+        _CAL_CACHE["model"] = model
+        _CAL_CACHE["ts"] = now
+        return model
+
+
+async def score_single_job(client: httpx.AsyncClient, job: dict) -> dict | None:
+    cos_sim = compute_baseline_similarity(job.get("jd_text") or "")
+    cal_model = await get_cached_calibration_model()
+    try:
+        res = await evaluate_with_jev(client, job)
+        raw_fit = res["jev_fit_prob"]
+        cal_fit = apply_calibration(cal_model, raw_fit) if cal_model else raw_fit
+        effective_fit = cal_fit if cal_model else raw_fit
+
+        passed = (res["jev_scam_prob"] < 0.30) and (effective_fit >= 0.55)
+        stage = "TRIAGED" if passed else "DROPPED"
+
+        def _persist():
+            with get_connection() as c, c.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE jobs
+                    SET cosine_sim = %s,
+                        jev_scam_prob = %s,
+                        jev_fit_tier = %s,
+                        jev_fit_prob = %s,
+                        jev_fit_prob_cal = %s,
+                        jev_persona = %s,
+                        triage_passed = %s,
+                        workflow_stage = %s
+                    WHERE id = %s;
+                    """,
+                    (
+                        cos_sim,
+                        res["jev_scam_prob"],
+                        res["jev_fit_tier"],
+                        raw_fit,
+                        cal_fit,
+                        res["jev_persona"],
+                        passed,
+                        stage,
+                        job["id"],
+                    ),
+                )
+                c.commit()
+
+        await asyncio.to_thread(_persist)
+
+        icon = "✅ PASS" if passed else "🗑️ DROP"
+        print(
+            f"  {icon} | [{job['company']}] {job['title'][:42]} "
+            f"-> Fit: {raw_fit:.2f} (cal={cal_fit:.2f}, {res['jev_fit_tier']}) | Scam: {res['jev_scam_prob']:.2f}",
+            flush=True,
+        )
+
+        enriched = dict(job)
+        enriched.update({
+            "cosine_sim": cos_sim,
+            "jev_scam_prob": res["jev_scam_prob"],
+            "jev_fit_tier": res["jev_fit_tier"],
+            "jev_fit_prob": raw_fit,
+            "jev_fit_prob_cal": cal_fit,
+            "jev_persona": res["jev_persona"],
+            "triage_passed": passed,
+            "workflow_stage": stage,
+        })
+        return enriched
+    except Exception as e:
+        logger.error("Error scoring job #%s (%s): %s", job.get("id"), job.get("company"), e)
+        alert(f"⚠️ Error scoring job #{job.get('id')} ({job.get('company')}): {e}")
+        return None
+
+
+async def run_triage(batch_limit: int = 100):
+    def _fetch_unscored():
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, company, title, location, jd_text FROM jobs WHERE triage_passed IS NULL LIMIT %s;",
+                (batch_limit,),
+            )
+            return cur.fetchall()
+
+    unscored_jobs = await asyncio.to_thread(_fetch_unscored)
     if not unscored_jobs:
         print("✨ All jobs in Neon PostgreSQL are already triaged!")
         return
-
-    pairs = [
-        (r["jev_fit_prob"], 1 if r["human_action"] == "APPLIED" else 0)
-        for r in labeled_rows
-        if r["jev_fit_prob"] is not None
-    ]
-    cal_model = fit_calibration(pairs, min_n=20)
 
     route = "TypeSafe Direct (/v1/systemone)" if TYPESAFE_API_KEY else "OpenRouter Decisions API (/api/alpha/decisions)"
     print(f"🧠 Running System-1 Jev Triage on {len(unscored_jobs)} jobs via {route}...")
@@ -209,59 +305,17 @@ async def run_triage(batch_limit: int = 100):
     passed_count = 0
 
     async with httpx.AsyncClient(timeout=25.0) as client:
-        async def _score_job(job):
+        async def _bound_score(job):
             nonlocal passed_count
             async with sem:
-                cos_sim = compute_baseline_similarity(job.get("jd_text") or "")
-                try:
-                    res = await evaluate_with_jev(client, job)
-                    raw_fit = res["jev_fit_prob"]
-                    cal_fit = apply_calibration(cal_model, raw_fit) if cal_model else raw_fit
-                    effective_fit = cal_fit if cal_model else raw_fit
+                enriched = await score_single_job(client, job)
+                if enriched and enriched.get("triage_passed"):
+                    passed_count += 1
 
-                    # Confidence Gate: Scam probability under 0.30 AND Fit probability at least 0.55
-                    passed = (res["jev_scam_prob"] < 0.30) and (effective_fit >= 0.55)
-                    if passed:
-                        passed_count += 1
-
-                    with get_connection() as c, c.cursor() as cur:
-                        cur.execute(
-                            """
-                            UPDATE jobs
-                            SET cosine_sim = %s,
-                                jev_scam_prob = %s,
-                                jev_fit_tier = %s,
-                                jev_fit_prob = %s,
-                                jev_fit_prob_cal = %s,
-                                jev_persona = %s,
-                                triage_passed = %s
-                            WHERE id = %s;
-                            """,
-                            (
-                                cos_sim,
-                                res["jev_scam_prob"],
-                                res["jev_fit_tier"],
-                                raw_fit,
-                                cal_fit,
-                                res["jev_persona"],
-                                passed,
-                                job["id"],
-                            ),
-                        )
-                        c.commit()
-
-                    icon = "✅ PASS" if passed else "🗑️ DROP"
-                    print(
-                        f"  {icon} | [{job['company']}] {job['title'][:42]} "
-                        f"-> Fit: {raw_fit:.2f} (cal={cal_fit:.2f}, {res['jev_fit_tier']}) | Scam: {res['jev_scam_prob']:.2f}"
-                    )
-                except Exception as e:
-                    logger.error("Error scoring job #%s (%s): %s", job["id"], job["company"], e)
-                    alert(f"⚠️ Error scoring job #{job['id']} ({job['company']}): {e}")
-
-        await asyncio.gather(*[_score_job(job) for job in unscored_jobs])
+        await asyncio.gather(*[_bound_score(job) for job in unscored_jobs])
 
     print(f"\n🎯 Jev Triage finished! {passed_count}/{len(unscored_jobs)} jobs cleared the gate.")
+
 
 if __name__ == "__main__":
     asyncio.run(run_triage())
