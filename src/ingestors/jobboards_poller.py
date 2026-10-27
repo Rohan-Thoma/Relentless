@@ -6,6 +6,7 @@ from jobspy import scrape_jobs
 
 from src.config import load_config
 from src.ingestors.common import clean_html, insert_job, matches_basic_filters
+from src.ingestors.freshness import is_timestamp_fresh
 from src.ingestors.url_resolver import register_discovered_board
 from src.settings_store import get_master_profile
 
@@ -189,6 +190,11 @@ async def poll_jobboards(
             site_added = 0
             site_counts = {}
             for _, row in df.iterrows():
+                # Enforce freshness filter
+                raw_date = row.get("date_posted") if hasattr(row, "get") else row.get("date_posted", None)
+                if not is_timestamp_fresh(raw_date, float(hrs)):
+                    continue
+
                 title = _get_row_str(row, "title")
                 company = _get_row_str(row, "company")
                 location_val = _get_row_str(row, "location")
@@ -203,10 +209,11 @@ async def poll_jobboards(
                 if not title or not apply_url:
                     continue
 
-                register_discovered_board(apply_url)
+                await asyncio.to_thread(register_discovered_board, apply_url)
 
                 if matches_basic_filters(title, location_val):
-                    inserted = insert_job(
+                    inserted = await asyncio.to_thread(
+                        insert_job,
                         None,
                         f"jobspy_{row_site}",
                         company or "Unknown",

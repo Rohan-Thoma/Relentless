@@ -16,6 +16,7 @@ from src.ingestors.common import (
     norm_loc,
     tokenize,
 )
+from src.ingestors.freshness import is_timestamp_fresh
 from src.ingestors.gmail_ingestor import poll_gmail_alerts
 from src.ingestors.jobboards_poller import poll_jobboards
 
@@ -34,6 +35,18 @@ def _norm_loc(loc: str) -> str:
     return norm_loc(loc)
 
 
+def _max_ats_age_hours() -> float:
+    cfg = _cfg()
+    ingest_cfg = getattr(cfg, "ingestion", None)
+    days = getattr(ingest_cfg, "max_job_age_days", 7) if ingest_cfg else 7
+    return float(days) * 24.0 if days > 0 else 0.0
+
+
+async def _insert_job_async(conn, *args, **kwargs) -> bool:
+    if conn is None:
+        return await asyncio.to_thread(insert_job, None, *args, **kwargs)
+    return insert_job(conn, *args, **kwargs)
+
 
 async def poll_greenhouse(client: httpx.AsyncClient, conn, board: str) -> int:
     url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
@@ -41,14 +54,17 @@ async def poll_greenhouse(client: httpx.AsyncClient, conn, board: str) -> int:
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     for job in resp.json().get("jobs", []):
+        if not is_timestamp_fresh(job.get("updated_at"), max_hrs):
+            continue
         title = job.get("title", "")
         loc_name = job.get("location", {}).get("name", "") if isinstance(job.get("location"), dict) else ""
         offices = [o.get("name", "") for o in job.get("offices", []) if isinstance(o, dict)]
         loc = ", ".join(filter(None, [loc_name, *offices]))
         if matches_basic_filters(title, loc):
             jd = clean_html(job.get("content", ""))
-            if insert_job(conn, "greenhouse", board.capitalize(), title, loc, job.get("absolute_url", ""), jd):
+            if await _insert_job_async(conn, "greenhouse", board.capitalize(), title, loc, job.get("absolute_url", ""), jd):
                 added += 1
     return added
 
@@ -59,7 +75,10 @@ async def poll_lever(client: httpx.AsyncClient, conn, site: str) -> int:
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     for job in resp.json():
+        if not is_timestamp_fresh(job.get("createdAt"), max_hrs):
+            continue
         title = job.get("text", "")
         cats = job.get("categories") or {}
         all_locs = cats.get("allLocations") or []
@@ -67,7 +86,7 @@ async def poll_lever(client: httpx.AsyncClient, conn, site: str) -> int:
         loc = ", ".join(filter(None, [cats.get("location", ""), *all_locs, wp]))
         if matches_basic_filters(title, loc):
             jd = job.get("descriptionPlain", "")
-            if insert_job(conn, "lever", site.capitalize(), title, loc, job.get("hostedUrl", ""), jd):
+            if await _insert_job_async(conn, "lever", site.capitalize(), title, loc, job.get("hostedUrl", ""), jd):
                 added += 1
     return added
 
@@ -78,7 +97,10 @@ async def poll_ashby(client: httpx.AsyncClient, conn, board: str) -> int:
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     for job in resp.json().get("jobs", []):
+        if not is_timestamp_fresh(job.get("publishedAt"), max_hrs):
+            continue
         title = job.get("title", "")
         loc_primary = job.get("location", "")
         sec_locs = [s.get("location", "") for s in job.get("secondaryLocations", []) if isinstance(s, dict)]
@@ -87,7 +109,7 @@ async def poll_ashby(client: httpx.AsyncClient, conn, board: str) -> int:
         loc = ", ".join(filter(None, [loc_primary, *sec_locs, is_remote, wp]))
         if matches_basic_filters(title, loc):
             jd = clean_html(job.get("descriptionHtml", ""))
-            if insert_job(conn, "ashby", board.capitalize(), title, loc, job.get("jobUrl", ""), jd):
+            if await _insert_job_async(conn, "ashby", board.capitalize(), title, loc, job.get("jobUrl", ""), jd):
                 added += 1
     return added
 
@@ -100,6 +122,7 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
     offset = 0
     limit = 20
     total = None
+    max_hrs = _max_ats_age_hours()
     while True:
         payload = {
             "appliedFacets": {},
@@ -120,6 +143,8 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
         if not postings:
             break
         for item in postings:
+            if not is_timestamp_fresh(item.get("postedOn"), max_hrs):
+                continue
             title = item.get("title", "")
             loc = item.get("locationsText", "")
             ext_path = item.get("externalPath", "")
@@ -137,7 +162,7 @@ async def poll_workday(client: httpx.AsyncClient, conn, cfg: dict) -> int:
                     info.get("externalUrl")
                     or f"https://{cfg['tenant']}.{cfg['wd_instance']}.myworkdayjobs.com/{cfg['site']}{ext_path}"
                 )
-                if insert_job(conn, "workday", company, title, loc, apply_url, jd):
+                if await _insert_job_async(conn, "workday", company, title, loc, apply_url, jd):
                     added += 1
         offset += limit
         if offset >= (total or 0):
@@ -151,9 +176,12 @@ async def poll_smartrecruiters(client: httpx.AsyncClient, conn, company: str) ->
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     data = resp.json()
     postings = data.get("content", []) if isinstance(data, dict) else []
     for job in postings:
+        if not is_timestamp_fresh(job.get("releasedDate"), max_hrs):
+            continue
         title = job.get("name", "")
         job_id = job.get("id", "")
         loc_data = job.get("location") if isinstance(job.get("location"), dict) else {}
@@ -200,7 +228,7 @@ async def poll_smartrecruiters(client: httpx.AsyncClient, conn, company: str) ->
                 else ""
             )
 
-        if insert_job(conn, "smartrecruiters", company.capitalize(), title, loc, apply_url, jd):
+        if await _insert_job_async(conn, "smartrecruiters", company.capitalize(), title, loc, apply_url, jd):
             added += 1
     return added
 
@@ -211,9 +239,12 @@ async def poll_recruitee(client: httpx.AsyncClient, conn, company: str) -> int:
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     data = resp.json()
     offers = data.get("offers", []) if isinstance(data, dict) else []
     for job in offers:
+        if not is_timestamp_fresh(job.get("created_at"), max_hrs):
+            continue
         title = job.get("title", "")
         loc_str = job.get("location") or ""
         city = job.get("city") or ""
@@ -225,7 +256,7 @@ async def poll_recruitee(client: httpx.AsyncClient, conn, company: str) -> int:
         if matches_basic_filters(title, loc):
             jd = clean_html(job.get("description", ""))
             apply_url = job.get("careers_url", "") or job.get("url", "")
-            if insert_job(conn, "recruitee", company.capitalize(), title, loc, apply_url, jd):
+            if await _insert_job_async(conn, "recruitee", company.capitalize(), title, loc, apply_url, jd):
                 added += 1
     return added
 
@@ -236,16 +267,19 @@ async def poll_remotive(client: httpx.AsyncClient, conn) -> int:
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     data = resp.json()
     jobs = data.get("jobs", []) if isinstance(data, dict) else []
     for job in jobs:
+        if not is_timestamp_fresh(job.get("publication_date"), max_hrs):
+            continue
         title = job.get("title", "")
         company = job.get("company_name", "RemotiveCompany")
         loc = job.get("candidate_required_location") or "Remote"
         if matches_basic_filters(title, loc):
             jd = clean_html(job.get("description", ""))
             apply_url = job.get("url", "")
-            if insert_job(conn, "remotive", company, title, loc, apply_url, jd):
+            if await _insert_job_async(conn, "remotive", company, title, loc, apply_url, jd):
                 added += 1
     return added
 
@@ -256,9 +290,12 @@ async def poll_arbeitnow(client: httpx.AsyncClient, conn) -> int:
     if resp.status_code != 200:
         return 0
     added = 0
+    max_hrs = _max_ats_age_hours()
     data = resp.json()
     jobs = data.get("data", []) if isinstance(data, dict) else []
     for job in jobs:
+        if not is_timestamp_fresh(job.get("created_at"), max_hrs):
+            continue
         title = job.get("title", "")
         company = job.get("company_name", "ArbeitnowCompany")
         loc_primary = job.get("location", "")
@@ -267,7 +304,7 @@ async def poll_arbeitnow(client: httpx.AsyncClient, conn) -> int:
         if matches_basic_filters(title, loc):
             jd = clean_html(job.get("description", ""))
             apply_url = job.get("url", "")
-            if insert_job(conn, "arbeitnow", company, title, loc, apply_url, jd):
+            if await _insert_job_async(conn, "arbeitnow", company, title, loc, apply_url, jd):
                 added += 1
     return added
 
@@ -498,7 +535,6 @@ async def run_ingestion(
 
     print(f"\n🚀 Ingestion complete! {total_new} brand-new jobs saved to Neon PostgreSQL.")
     return total_new
-
 
 
 if __name__ == "__main__":

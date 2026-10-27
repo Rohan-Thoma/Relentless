@@ -1,8 +1,10 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 import email
 from email.header import decode_header
 import email.policy
+import email.utils
+import hashlib
 import imaplib
 import logging
 import os
@@ -15,20 +17,13 @@ import httpx
 from src.config import load_config
 from src.db import get_connection
 from src.ingestors.common import clean_html, insert_job, matches_basic_filters
-from src.ingestors.url_resolver import (
-    DIRECT_ATS_DOMAINS,
-    register_discovered_board,
-    resolve_direct_apply_url,
-)
+from src.ingestors.freshness import is_timestamp_fresh
+from src.ingestors.url_resolver import register_discovered_board, resolve_direct_apply_url
 
 logger = logging.getLogger(__name__)
 
-LINKEDIN_JOB_URL_PATTERN = re.compile(
-    r"https?://(?:www\.)?linkedin\.com/(?:comm/)?jobs/view/(\d+)"
-)
 
-
-def _decode_header_str(val: str | None) -> str:
+def _decode_header_str(val: str) -> str:
     if not val:
         return ""
     decoded_parts = []
@@ -43,6 +38,16 @@ def _decode_header_str(val: str | None) -> str:
 def is_email_processed(message_id: str, conn=None) -> bool:
     if not message_id:
         return False
+
+    if conn is None:
+        try:
+            from src.ingestors.dedup_cache import CACHE
+
+            if CACHE.hydrated and not os.getenv("PYTEST_CURRENT_TEST"):
+                if CACHE.has_email(message_id):
+                    return True
+        except Exception:
+            pass
 
     def _query(c):
         with c.cursor() as cur:
@@ -86,6 +91,13 @@ def mark_email_processed(
             )
             inserted = cur.fetchone() is not None
             c.commit()
+            if inserted:
+                try:
+                    from src.ingestors.dedup_cache import CACHE
+
+                    CACHE.record_email(message_id)
+                except Exception:
+                    pass
             return inserted
 
     if conn is not None:
@@ -96,6 +108,12 @@ def mark_email_processed(
             return False
 
     if os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("RELENTLESS_TEST_LIVE_DB"):
+        try:
+            from src.ingestors.dedup_cache import CACHE
+
+            CACHE.record_email(message_id)
+        except Exception:
+            pass
         return True
 
     try:
@@ -111,31 +129,34 @@ def extract_job_links_from_email_html(html: str) -> dict:
         return {"linkedin_job_ids": [], "direct_ats_urls": []}
 
     soup = BeautifulSoup(html, "html.parser")
-    found_urls = set()
-
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        if href:
-            found_urls.add(href)
-
-    for text_url in re.findall(r"https?://[^\s\"'<>]+", html):
-        found_urls.add(text_url)
-
     linkedin_ids = []
     direct_urls = []
 
-    for url in found_urls:
-        li_match = LINKEDIN_JOB_URL_PATTERN.search(url)
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href.startswith("http"):
+            continue
+
+        li_match = re.search(r"linkedin\.com/comm/jobs/view/(\d+)", href)
+        if not li_match:
+            li_match = re.search(r"linkedin\.com/jobs/view/(\d+)", href)
+        if not li_match:
+            li_match = re.search(r"currentJobId=(\d+)", href)
+
         if li_match:
-            job_id = li_match.group(1)
-            if job_id not in linkedin_ids:
-                linkedin_ids.append(job_id)
-        else:
-            url_low = url.lower()
-            if any(dom in url_low for dom in DIRECT_ATS_DOMAINS):
-                clean_url = url.split("?")[0] if "?" in url else url
-                if clean_url not in direct_urls:
-                    direct_urls.append(clean_url)
+            jid = li_match.group(1)
+            if jid not in linkedin_ids:
+                linkedin_ids.append(jid)
+            continue
+
+        ats_match = re.search(
+            r"https?://(?:[a-zA-Z0-9_\-]+\.)*(?:greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|smartrecruiters\.com|recruitee\.com)/[^\s\"'>]+",
+            href,
+        )
+        if ats_match:
+            direct = ats_match.group(0).split("?")[0]
+            if direct not in direct_urls:
+                direct_urls.append(direct)
 
     return {
         "linkedin_job_ids": linkedin_ids,
@@ -217,6 +238,10 @@ async def fetch_linkedin_guest_job(
                     external_url = href
                     break
 
+        # 6. Posted time ago
+        posted_el = soup.select_one(".posted-time-ago__text, time")
+        posted_ago = posted_el.get_text(strip=True) if posted_el else None
+
         return {
             "job_id": linkedin_job_id,
             "title": title,
@@ -224,6 +249,7 @@ async def fetch_linkedin_guest_job(
             "location": location,
             "jd_text": jd_text,
             "external_apply_url": external_url,
+            "posted_ago": posted_ago,
         }
     except Exception as e:
         logger.warning("Error fetching LinkedIn guest job %s: %s", linkedin_job_id, e)
@@ -240,56 +266,115 @@ def fetch_alert_emails_sync(
     keywords = [k.lower() for k in (sender_keywords or [])]
     emails = []
 
+    cutoff_dt = datetime.now(UTC) - timedelta(days=lookback_days)
+    since_date = cutoff_dt.strftime("%d-%b-%Y")
+
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
         mail.login(gmail_address, gmail_password)
 
-        msg_ids = []
+        uids = []
         is_labeled_search = False
 
-        # 1. Search by user's dedicated job alerts label first (e.g., label:professional-job_alerts)
+        # 1. Search by user's dedicated job alerts label with lookback constraint
         if gmail_label:
             try:
-                mail.select("INBOX", readonly=True)
-                status, data = mail.search(None, "X-GM-RAW", f"label:{gmail_label}")
+                status_box, _ = mail.select('"[Gmail]/All Mail"', readonly=True)
+                if status_box != "OK":
+                    mail.select("INBOX", readonly=True)
+                raw_query = f"label:{gmail_label} newer_than:{lookback_days}d"
+                status, data = mail.uid("search", None, "X-GM-RAW", raw_query)
                 if status == "OK" and data and data[0]:
-                    msg_ids = data[0].split()
+                    uids = data[0].split()
                     is_labeled_search = True
             except Exception as e:
                 logger.debug("Gmail X-GM-RAW label search failed: %s", e)
 
-            # Try selecting the label folder directly if X-GM-RAW did not yield
-            if not msg_ids:
+            # Try selecting the label folder directly with SINCE date
+            if not uids:
                 try:
                     status_box, _ = mail.select(f'"{gmail_label}"', readonly=True)
                     if status_box == "OK":
-                        status, data = mail.search(None, "ALL")
+                        status, data = mail.uid("search", None, f'(SINCE "{since_date}")')
                         if status == "OK" and data and data[0]:
-                            msg_ids = data[0].split()
+                            uids = data[0].split()
                             is_labeled_search = True
                 except Exception as e:
                     logger.debug("Selecting mailbox '%s' failed: %s", gmail_label, e)
 
         # 2. Fallback to INBOX SINCE search if no label search succeeded
-        if not msg_ids:
+        if not uids:
             mail.select("INBOX", readonly=True)
-            since_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%d-%b-%Y")
-            status, data = mail.search(None, f'(SINCE "{since_date}")')
+            status, data = mail.uid("search", None, f'(SINCE "{since_date}")')
             if status == "OK" and data and data[0]:
-                msg_ids = data[0].split()
+                uids = data[0].split()
 
-        if not msg_ids:
-            mail.logout()
+        if not uids:
+            try:
+                mail.logout()
+            except Exception:
+                pass
             return []
 
-        # Fetch newest first
-        for msg_id_bytes in reversed(msg_ids):
-            status, msg_data = mail.fetch(msg_id_bytes, "(RFC822)")
-            if status != "OK" or not msg_data:
+        # Stage A: Batch-fetch headers in chunks of 100 UIDs
+        candidate_uids = []
+        uids_reversed = list(reversed(uids))
+
+        for i in range(0, len(uids_reversed), 100):
+            chunk = uids_reversed[i : i + 100]
+            uid_set_str = b",".join(chunk).decode("ascii")
+            status, fetch_data = mail.uid(
+                "fetch", uid_set_str, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID SUBJECT FROM DATE)])"
+            )
+            if status != "OK" or not fetch_data:
+                continue
+
+            for item in fetch_data:
+                if not isinstance(item, tuple) or len(item) < 2:
+                    continue
+                header_bytes = item[1]
+                hdr_msg = email.message_from_bytes(header_bytes, policy=email.policy.default)
+
+                subject = _decode_header_str(hdr_msg.get("Subject", ""))
+                sender = _decode_header_str(hdr_msg.get("From", ""))
+                date_hdr = hdr_msg.get("Date", "")
+                message_id = (hdr_msg.get("Message-ID") or "").strip()
+
+                if not message_id:
+                    message_id = hashlib.sha256(f"{sender}|{subject}|{date_hdr}".encode()).hexdigest()
+
+                if date_hdr:
+                    try:
+                        parsed_dt = email.utils.parsedate_to_datetime(date_hdr)
+                        if parsed_dt.tzinfo is None:
+                            parsed_dt = parsed_dt.replace(tzinfo=UTC)
+                        if parsed_dt < (cutoff_dt - timedelta(hours=12)):
+                            continue
+                    except Exception:
+                        pass
+
+                if not is_labeled_search and keywords:
+                    combined = f"{sender} {subject}".lower()
+                    if not any(kw in combined for kw in keywords):
+                        continue
+
+                if is_email_processed(message_id):
+                    continue
+
+                # Extract UID from header response
+                uid_match = re.search(rb"UID (\d+)", item[0])
+                msg_uid = uid_match.group(1) if uid_match else None
+                if msg_uid:
+                    candidate_uids.append((msg_uid, message_id, subject, sender))
+
+        # Stage B: Fetch full body ONLY for candidate UIDs
+        for msg_uid, message_id, subject, sender in candidate_uids:
+            status, body_data = mail.uid("fetch", msg_uid, "(BODY.PEEK[])")
+            if status != "OK" or not body_data:
                 continue
 
             raw_email = None
-            for part in msg_data:
+            for part in body_data:
                 if isinstance(part, tuple) and len(part) > 1:
                     raw_email = part[1]
                     break
@@ -298,20 +383,7 @@ def fetch_alert_emails_sync(
                 continue
 
             msg = email.message_from_bytes(raw_email, policy=email.policy.default)
-            message_id = (msg.get("Message-ID") or str(msg_id_bytes)).strip()
-            subject = _decode_header_str(msg.get("Subject", ""))
-            sender = _decode_header_str(msg.get("From", ""))
 
-            # If not sourced from the dedicated label, filter by sender/subject keywords
-            if not is_labeled_search and keywords:
-                combined = f"{sender} {subject}".lower()
-                if not any(kw in combined for kw in keywords):
-                    continue
-
-            if is_email_processed(message_id):
-                continue
-
-            # Extract HTML body
             html_content = ""
             if msg.is_multipart():
                 for part in msg.walk():
@@ -344,7 +416,10 @@ def fetch_alert_emails_sync(
                     "html": html_content,
                 })
 
-        mail.logout()
+        try:
+            mail.logout()
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("Error fetching emails from Gmail: %s", e)
 
@@ -386,6 +461,8 @@ async def poll_gmail_alerts(
             scanner_cfg.label if scanner_cfg else "professional-job_alerts"
         )
 
+    max_age_hours = getattr(scanner_cfg, "max_job_age_hours", 96) if scanner_cfg else 96
+
     print(
         f"  📬 [Gmail Scanner] Checking mailbox '{gmail_address}' for label '{label}' (lookback: {days} days)...",
         flush=True,
@@ -407,6 +484,8 @@ async def poll_gmail_alerts(
     total_extracted = 0
     headers = {"User-Agent": "Mozilla/5.0 (compatible; RelentlessJobScout/1.0)"}
 
+    li_sem = asyncio.Semaphore(4)
+
     async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
         for idx, mail in enumerate(emails, 1):
             msg_id = mail["message_id"]
@@ -424,14 +503,19 @@ async def poll_gmail_alerts(
             mail_extracted_jobs = 0
 
             # 1. Register any direct ATS boards found in the email
-            for ats_url in extracted_links.get("direct_ats_urls", []):
-                register_discovered_board(ats_url)
+            for ats_url in ats_urls:
+                await asyncio.to_thread(register_discovered_board, ats_url)
 
-            # 2. Fetch full JD from LinkedIn guest API for each LinkedIn Job ID
-            for li_id in extracted_links.get("linkedin_job_ids", []):
-                job_data = await fetch_linkedin_guest_job(client, li_id)
+            # 2. Fetch LinkedIn guest jobs concurrently with semaphore
+            async def _process_li_id(li_id: str) -> bool:
+                async with li_sem:
+                    job_data = await fetch_linkedin_guest_job(client, li_id)
                 if not job_data:
-                    continue
+                    return False
+
+                if not is_timestamp_fresh(job_data.get("posted_ago"), max_age_hours):
+                    logger.debug("Skipping stale LinkedIn job %s (posted: %s)", li_id, job_data.get("posted_ago"))
+                    return False
 
                 title = job_data["title"]
                 company = job_data["company"]
@@ -442,14 +526,12 @@ async def poll_gmail_alerts(
                 linkedin_fallback = f"https://www.linkedin.com/jobs/view/{li_id}"
                 apply_url = external_apply or linkedin_fallback
 
-                # If apply_url still points to LinkedIn, attempt resolving the company's direct ATS
                 if "linkedin.com" in apply_url.lower():
-                    apply_url = await resolve_direct_apply_url(
-                        client, company, title, fallback_url=apply_url
-                    )
+                    apply_url = await resolve_direct_apply_url(client, company, title, fallback_url=apply_url)
 
                 if matches_basic_filters(title, location):
-                    inserted = insert_job(
+                    inserted = await asyncio.to_thread(
+                        insert_job,
                         None,
                         "gmail_alert",
                         company,
@@ -459,11 +541,14 @@ async def poll_gmail_alerts(
                         jd_text,
                         original_source_url=linkedin_fallback,
                     )
-                    if inserted:
-                        mail_extracted_jobs += 1
-                        total_extracted += 1
+                    return bool(inserted)
+                return False
 
-            mark_email_processed(msg_id, subject, sender, mail_extracted_jobs)
+            results = await asyncio.gather(*[_process_li_id(lid) for lid in li_ids])
+            mail_extracted_jobs = sum(1 for r in results if r)
+            total_extracted += mail_extracted_jobs
+
+            await asyncio.to_thread(mark_email_processed, msg_id, subject, sender, mail_extracted_jobs)
             print(f"      + Extracted {mail_extracted_jobs} new matching jobs from this email.", flush=True)
             if mail_extracted_jobs > 0:
                 logger.info(
@@ -482,4 +567,3 @@ async def poll_gmail_alerts(
 
 if __name__ == "__main__":
     asyncio.run(poll_gmail_alerts())
-
