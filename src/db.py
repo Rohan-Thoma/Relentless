@@ -236,18 +236,26 @@ def consume_pending_action(raw_token: str, kind: str | None = None):
     token_hash = _hash_token(raw_token)
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                DELETE FROM pending_actions
-                WHERE token = %s AND expires_at > NOW()
-                RETURNING token, kind, payload, expires_at;
-                """,
-                (token_hash,),
-            )
+            if kind is not None:
+                cur.execute(
+                    """
+                    DELETE FROM pending_actions
+                    WHERE token = %s AND kind = %s AND expires_at > NOW()
+                    RETURNING token, kind, payload, expires_at;
+                    """,
+                    (token_hash, kind),
+                )
+            else:
+                cur.execute(
+                    """
+                    DELETE FROM pending_actions
+                    WHERE token = %s AND expires_at > NOW()
+                    RETURNING token, kind, payload, expires_at;
+                    """,
+                    (token_hash,),
+                )
             row = cur.fetchone()
             if row is None:
-                return None
-            if kind is not None and row["kind"] != kind:
                 return None
             conn.commit()
             return row
