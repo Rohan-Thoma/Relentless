@@ -351,6 +351,16 @@ async def test_rich_message_lifecycle_and_inflight_guard(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
     monkeypatch.setattr("src.hitl.telegram_bot.TG_BASE", base_url)
 
+    fake_conn = MagicMock()
+    fake_cur = MagicMock()
+    fake_conn.cursor.return_value.__enter__.return_value = fake_cur
+
+    @contextmanager
+    def mock_get_conn():
+        yield fake_conn
+
+    monkeypatch.setattr("src.hitl.telegram_bot.get_connection", mock_get_conn)
+
     with respx.mock:
         send_route = respx.post(f"{base_url}/sendRichMessage").mock(
             return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 9001}})

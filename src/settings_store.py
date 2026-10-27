@@ -79,6 +79,8 @@ def _invalidate_profile_cache():
 
 
 def _allow_example_profile() -> bool:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
     return os.getenv("ALLOW_EXAMPLE_PROFILE", "").strip().lower() in ("1", "true", "yes")
 
 

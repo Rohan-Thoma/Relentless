@@ -240,7 +240,7 @@ def consume_pending_action(raw_token: str, kind: str | None = None):
                 """
                 DELETE FROM pending_actions
                 WHERE token = %s AND expires_at > NOW()
-                RETURNING id, kind, payload, created_at, expires_at;
+                RETURNING token, kind, payload, expires_at;
                 """,
                 (token_hash,),
             )
@@ -261,7 +261,7 @@ def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload: dict |
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO apply_confirmations (token, job_id, kind, payload, expires_at)
+                INSERT INTO apply_confirmations (token_hash, job_id, kind, payload, expires_at)
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING id;
                 """,
@@ -279,7 +279,7 @@ def consume_apply_confirmation(raw_token: str, job_id: int | None = None, kind: 
                 """
                 SELECT id, job_id, kind, payload, expires_at, status
                 FROM apply_confirmations
-                WHERE token = %s AND status = 'PENDING'
+                WHERE token_hash = %s AND status = 'PENDING'
                 FOR UPDATE;
                 """,
                 (token_hash,),

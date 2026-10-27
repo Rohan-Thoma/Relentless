@@ -30,4 +30,5 @@ jobs:
       - env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/relentless
           RELENTLESS_TEST_LIVE_DB: "1"
+          ALLOW_EXAMPLE_PROFILE: "1"
         run: pytest -q
