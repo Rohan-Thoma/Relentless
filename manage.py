@@ -1,28 +1,33 @@
+import asyncio
 import os
 import shutil
 import sys
 import time
 
-import httpx
 from dotenv import load_dotenv, set_key
-
 from evals.evaluate_triage import run_evaluation
-import asyncio
+import httpx
 
-from src.db import get_connection, init_db, reset_database, get_pool, close_pool
+from src.db import close_pool, get_connection, get_pool, init_db, reset_database
 from src.db_migrate import pending_migrations
-from src.knowledge.store import hydrate, flush, get_store
-from src.knowledge.export import export_bundle
-from src.knowledge.distiller import run_distill
-from src.settings_store import EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH, load_master_profile, sync_local_to_db
-from src.httpx_utils import get_with_retry
 from src.hitl.telegram_bot import listen_for_button_clicks
+from src.httpx_utils import get_with_retry
+from src.knowledge.distiller import run_distill
+from src.knowledge.export import export_bundle
+from src.knowledge.store import flush, get_store, hydrate
 from src.main_loop import main as run_loop
+from src.settings_store import (
+    EXAMPLE_PROFILE_PATH,
+    LOCAL_PROFILE_PATH,
+    load_master_profile,
+    sync_local_to_db,
+)
 
 ENV_FILE = ".env"
 
+
 def interactive_setup():
-    print("\n🚀 Welcome to the Relentless v1.0 Plug-and-Play Setup Wizard!\n")
+    print("\n🚀 Welcome to the Relentless Plug-and-Play Setup Wizard!\n")
     if not os.path.exists(ENV_FILE):
         shutil.copyfile(".env.example", ENV_FILE)
     load_dotenv(ENV_FILE, override=True)
@@ -71,6 +76,7 @@ def interactive_setup():
     init_db()
     sync_local_to_db()
     print("\n🎉 Setup Complete! Edit 'config/master_profile.json' anytime and run 'python manage.py sync'.")
+
 
 def run_doctor():
     load_dotenv(ENV_FILE, override=True)
@@ -129,20 +135,21 @@ def run_doctor():
     except Exception:
         pass
 
+
 def print_help():
     print(
         """
-🛠️  Relentless v1.0 — One-Stop Control Center (manage.py)
+🛠️  Relentless — One-Stop Control Center (manage.py)
 
 Usage:
-  python manage.py setup          # Interactive 60-sec onboarding wizard (auto-detects Telegram Chat ID!)
+  python manage.py setup          # Interactive onboarding wizard (auto-detects Telegram Chat ID!)
   python manage.py sync           # Push local gitignored master_profile.json & config.yaml to Neon DB
   python manage.py doctor         # Verify DB, API keys, and cloud profile privacy status
   python manage.py reset labels   # Soft Reset: clear only button clicks (Eval n=0, keeps Jev scores)
   python manage.py reset triage   # Medium Reset: clear Jev scores + clicks to re-score scraped jobs
   python manage.py reset all      # Factory Reset: wipe all scraped jobs and restart IDs at #1
   python manage.py eval           # Print live Precision@K, Wilson 95% CIs, and Brier calibration table
-  python manage.py run            # Start autonomous worker loop (Scrapes FIRST, then leisurely ATS)
+  python manage.py run            # Unified Command: Starts Telegram bot + streaming producers concurrently
   python manage.py run --scrape-only # Fast Mode: Scrapes Job boards & Gmail only (skips slow ATS)
   python manage.py run --ats-only    # ATS Only: Scans only company ATS endpoints
   python manage.py run --once        # Run single pipeline iteration and exit
@@ -161,42 +168,29 @@ def _parse_run_flags(argv: list[str]) -> dict:
     }
     i = 0
     while i < len(argv):
-        arg = argv[i].lower()
-        if arg in ("--scrape-only", "--fast", "--no-ats", "--skip-ats"):
+        arg = argv[i]
+        if arg == "--scrape-only" or arg == "--fast":
             flags["scrape_only"] = True
+            flags["skip_ats"] = True
+        elif arg == "--skip-ats":
             flags["skip_ats"] = True
         elif arg == "--ats-only":
             flags["ats_only"] = True
         elif arg == "--jobboards-only":
             flags["sources"] = ["jobboards"]
-            flags["skip_ats"] = True
             flags["scrape_only"] = True
+            flags["skip_ats"] = True
         elif arg == "--gmail-only":
             flags["sources"] = ["gmail"]
-            flags["skip_ats"] = True
             flags["scrape_only"] = True
+            flags["skip_ats"] = True
+        elif arg.startswith("--sources="):
+            raw = arg.split("=", 1)[1]
+            flags["sources"] = [s.strip().lower() for s in raw.split(",") if s.strip()]
         elif arg == "--once":
             flags["once"] = True
-        elif arg.startswith("--sources="):
-            flags["sources"] = [s.strip() for s in arg.split("=", 1)[1].split(",") if s.strip()]
-        elif arg == "--sources" and i + 1 < len(argv):
-            i += 1
-            flags["sources"] = [s.strip() for s in argv[i].split(",") if s.strip()]
         elif arg in ("-h", "--help"):
-            print(
-                """
-Usage: python manage.py run [OPTIONS]
-
-Options:
-  --scrape-only, --fast, --no-ats   Prioritize and run ONLY JobSpy & Gmail scraping (skips slow ATS)
-  --ats-only                        Run ONLY company ATS endpoints (Greenhouse, Lever, Ashby, Workday)
-  --jobboards-only                  Run ONLY JobSpy job boards (Naukri, LinkedIn, Indeed, Google)
-  --gmail-only                      Run ONLY Gmail job alerts scanner
-  --sources <list>                  Comma-separated sources: jobboards,gmail
-  --once                            Run a single cycle and exit (great for testing)
-  -h, --help                        Show this message
-"""
-            )
+            print_help()
             sys.exit(0)
         i += 1
     return flags
@@ -221,6 +215,7 @@ if __name__ == "__main__":
         asyncio.run(run_loop(**run_args))
     elif cmd == "ingest":
         from src.ingestors.ats_poller import run_ingestion
+
         run_args = _parse_run_flags(sys.argv[2:])
         run_args.pop("once", None)
         asyncio.run(run_ingestion(**run_args))
@@ -297,7 +292,9 @@ if __name__ == "__main__":
             pattern = sys.argv[3] if len(sys.argv) > 3 else ""
             with get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO knowledge_forget (pattern) VALUES (%s) ON CONFLICT DO NOTHING;", (pattern,))
+                    cur.execute(
+                        "INSERT INTO knowledge_forget (pattern) VALUES (%s) ON CONFLICT DO NOTHING;", (pattern,)
+                    )
                 conn.commit()
             hydrate()
             store = get_store()
