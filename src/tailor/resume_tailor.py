@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import re
 
+from typing import Any
+
 from dotenv import load_dotenv
 import httpx
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import typst
 
 from src.db import get_connection
@@ -54,6 +56,94 @@ class TailoredResumeOutput(BaseModel):
     change_rationale: list[str] = Field(
         description="3 to 4 bullet points explaining specific rephrasings, keyword alignments, and domain nuances added."
     )
+
+    @field_validator("skill_categories", mode="before")
+    @classmethod
+    def normalize_skill_categories(cls, v: Any) -> list[dict]:
+        if isinstance(v, dict):
+            if "categories" in v and isinstance(v["categories"], list):
+                return cls.normalize_skill_categories(v["categories"])
+            normalized = []
+            for cat_name, skills_val in v.items():
+                if isinstance(skills_val, list):
+                    skills_list = [str(s).strip() for s in skills_val if str(s).strip()]
+                elif isinstance(skills_val, str):
+                    skills_list = [s.strip() for s in skills_val.split(",") if s.strip()]
+                elif isinstance(skills_val, dict) and "skills" in skills_val:
+                    raw = skills_val["skills"]
+                    skills_list = raw if isinstance(raw, list) else [s.strip() for s in str(raw).split(",") if s.strip()]
+                else:
+                    skills_list = [str(skills_val)]
+                normalized.append({"category": str(cat_name), "skills": skills_list})
+            return normalized
+
+        if isinstance(v, list):
+            normalized = []
+            for item in v:
+                if isinstance(item, dict):
+                    if "category" in item and "skills" in item:
+                        raw_skills = item["skills"]
+                        skills_list = (
+                            raw_skills if isinstance(raw_skills, list)
+                            else [s.strip() for s in str(raw_skills).split(",") if s.strip()]
+                        )
+                        normalized.append({"category": str(item["category"]), "skills": skills_list})
+                    elif len(item) == 1:
+                        cat_name, skills_val = next(iter(item.items()))
+                        skills_list = skills_val if isinstance(skills_val, list) else [str(skills_val)]
+                        normalized.append({"category": str(cat_name), "skills": skills_list})
+                    else:
+                        normalized.append(item)
+                elif isinstance(item, str):
+                    if ":" in item:
+                        cat_name, rest = item.split(":", 1)
+                        skills_list = [s.strip() for s in rest.split(",") if s.strip()]
+                        normalized.append({"category": cat_name.strip(), "skills": skills_list})
+                    else:
+                        normalized.append({"category": "Core Skills", "skills": [item.strip()]})
+                else:
+                    normalized.append(item)
+            return normalized
+
+        return []
+
+    @field_validator("change_rationale", mode="before")
+    @classmethod
+    def normalize_change_rationale(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            lines = [line.strip().lstrip("-•* ").strip() for line in v.split("\n") if line.strip()]
+            return lines if lines else [v.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        if isinstance(v, dict):
+            return [f"{k}: {val}" for k, val in v.items()]
+        return [str(v)]
+
+    @field_validator("matched_keywords", mode="before")
+    @classmethod
+    def normalize_matched_keywords(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return []
+
+    @field_validator("tailored_bullets_role_1", "tailored_bullets_role_2", "tailored_bullets_role_3", mode="before")
+    @classmethod
+    def normalize_bullets(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            lines = [line.strip().lstrip("-•* ").strip() for line in v.split("\n") if line.strip()]
+            return lines if lines else [v.strip()]
+        if isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return []
+
+    @field_validator("tailored_summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, v: Any) -> str:
+        if isinstance(v, list):
+            return " ".join(str(s).strip() for s in v if str(s).strip())
+        return str(v or "")
 
 
 class AuditUnavailable(Exception):
@@ -315,11 +405,20 @@ Job Description:
 {job.get('jd_text', '')[:4000]}
 """
 
-    prompt = (
-        "Generate the ATS-optimized JSON payload for this candidate. "
-        "Return strictly valid JSON conforming to the schema with fields: "
-        "tailored_summary, matched_keywords, skill_categories, tailored_bullets_role_1, tailored_bullets_role_2, tailored_bullets_role_3, change_rationale."
-    )
+    prompt = """Generate the ATS-optimized JSON payload for this candidate.
+Return strictly valid JSON matching this schema:
+{
+  "tailored_summary": "3-sentence executive summary...",
+  "matched_keywords": ["keyword1", "keyword2", ...],
+  "skill_categories": [
+    {"category": "Category Name 1", "skills": ["skill1", "skill2", ...]},
+    {"category": "Category Name 2", "skills": ["skill1", "skill2", ...]}
+  ],
+  "tailored_bullets_role_1": ["bullet 1", "bullet 2", ...],
+  "tailored_bullets_role_2": ["bullet 1", "bullet 2", ...],
+  "tailored_bullets_role_3": ["bullet 1", "bullet 2", ...],
+  "change_rationale": ["rationale point 1", "rationale point 2", ...]
+}"""
 
     async with httpx.AsyncClient(timeout=45.0) as client:
         resp = await post_with_retry(
