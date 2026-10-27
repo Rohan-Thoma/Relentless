@@ -529,3 +529,67 @@ async def test_crash_recovery_resumes_cleanly(monkeypatch, tmp_path):
     })
     assert pdf_path is not None
     assert "test_101.pdf" in pdf_path
+
+
+
+# ==============================================================================
+# Test 8: send_single_job_card Missing apply_url Hydration & Resilience
+# ==============================================================================
+@pytest.mark.asyncio
+async def test_send_single_job_card_missing_apply_url_hydrates_safely(monkeypatch):
+    """Verifies send_single_job_card never crashes on KeyError: 'apply_url' and hydrates from DB."""
+    from src.hitl.telegram_bot import send_single_job_card
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "mock:token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456")
+
+    db_row = {
+        "id": 999,
+        "company": "HydratedCorp",
+        "title": "Staff ML Engineer",
+        "location": "Hyderabad, India",
+        "source_ats": "greenhouse",
+        "apply_url": "https://boards.greenhouse.io/hydratedcorp/jobs/999",
+        "workflow_stage": "TRIAGED",
+    }
+
+    class FakeCursor:
+        def execute(self, q, p=None):
+            pass
+        def fetchone(self):
+            return db_row
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+        def commit(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr("src.hitl.telegram_bot.get_connection", lambda: FakeConn())
+
+    sent_payloads = []
+
+    async def mock_upsert(client, chat_id, job_id, markdown_body, inline_keyboard):
+        sent_payloads.append((job_id, markdown_body))
+        return 8888
+
+    monkeypatch.setattr("src.hitl.telegram_bot.upsert_job_rich_card", mock_upsert)
+
+    # Job dictionary completely missing apply_url and company
+    job_incomplete = {"id": 999}
+    mid = await send_single_job_card(job_incomplete)
+
+    assert mid == 8888
+    assert len(sent_payloads) == 1
+    jid, md = sent_payloads[0]
+    assert jid == 999
+    assert "HydratedCorp" in md
+    assert "https://boards.greenhouse.io/hydratedcorp/jobs/999" in md

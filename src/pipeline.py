@@ -148,16 +148,16 @@ class PipelineEngine:
 
         def _fetch_interrupted():
             with get_connection() as conn, conn.cursor() as cur:
-                # 1. Unscored jobs
+                # 1. Unscored jobs (ensure apply_url, source_ats, and all fields are selected)
                 cur.execute(
-                    "SELECT id, company, title, location, jd_text FROM jobs WHERE triage_passed IS NULL ORDER BY id ASC;"
+                    "SELECT * FROM jobs WHERE triage_passed IS NULL ORDER BY id ASC;"
                 )
                 unscored = [dict(r) for r in cur.fetchall()]
 
-                # 2. Triaged but unnotified jobs
+                # 2. Triaged but unnotified jobs (ensure apply_url, source_ats, and all fields are selected)
                 cur.execute(
                     """
-                    SELECT id, company, title, location, jd_text, jev_fit_prob, jev_fit_tier, jev_scam_prob, jev_persona
+                    SELECT *
                     FROM jobs
                     WHERE triage_passed = TRUE AND human_action IS NULL AND notified_at IS NULL
                     ORDER BY id ASC;

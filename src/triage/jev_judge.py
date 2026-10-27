@@ -288,7 +288,7 @@ async def run_triage(batch_limit: int = 100):
     def _fetch_unscored():
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT id, company, title, location, jd_text FROM jobs WHERE triage_passed IS NULL LIMIT %s;",
+                "SELECT * FROM jobs WHERE triage_passed IS NULL LIMIT %s;",
                 (batch_limit,),
             )
             return cur.fetchall()

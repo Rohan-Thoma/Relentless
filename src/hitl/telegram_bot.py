@@ -313,22 +313,53 @@ def _append_user_edit_note(job_id: int, note: str, chat_id: int | None = None) -
 
 
 async def send_single_job_card(j: dict, chat_id: int | None = None) -> int | None:
-    target_chat = chat_id or int(CHAT_ID)
-    jid = j["id"]
+    raw_chat = chat_id or os.getenv("TELEGRAM_CHAT_ID", "").strip() or CHAT_ID
+    try:
+        target_chat = int(raw_chat)
+    except (ValueError, TypeError):
+        target_chat = 0
+    jid = j.get("id")
+    if not jid:
+        logger.warning("Cannot send single job card: missing job id in %s", j)
+        return None
+
+    # Defensively hydrate from database if critical fields are missing
+    if not j.get("apply_url") or not j.get("company"):
+        def _hydrate():
+            try:
+                with get_connection() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT * FROM jobs WHERE id = %s;", (jid,))
+                    row = cur.fetchone()
+                    if row:
+                        for k, v in dict(row).items():
+                            if not j.get(k) and v is not None:
+                                j[k] = v
+            except Exception as e:
+                logger.warning("Could not hydrate missing job fields from DB for job #%s: %s", jid, e)
+
+        await asyncio.to_thread(_hydrate)
+
+    company = j.get("company", "Unknown")
+    title = j.get("title", "Untitled")
+    location = j.get("location", "Remote")
+    source_ats = j.get("source_ats", "web")
+    apply_url = j.get("apply_url") or ""
 
     effective_fit = j.get("jev_fit_prob_cal") or j.get("jev_fit_prob") or 0.0
     fit_pct = int(effective_fit * 100)
     scam_pct = int((j.get("jev_scam_prob") or 0) * 100)
 
+    apply_link_md = f"🔗 [Open Direct Application Page]({apply_url})" if apply_url else "🔗 *(Apply URL not available)*"
+
     markdown = (
-        f"🎯 *{j['company']}* — *{j['title']}* (Job #{jid})\n"
-        f"📍 `{j['location']}` | 🏢 ATS: `{j.get('source_ats', 'web')}`\n\n"
+        f"🎯 *{company}* — *{title}* (Job #{jid})\n"
+        f"📍 `{location}` | 🏢 ATS: `{source_ats}`\n\n"
         f"🧠 *System-1 Jev Triage:*\n"
         f"• Fit Probability: *{fit_pct}%* (`{j.get('jev_fit_tier', 'fit')}`)\n"
         f"• Scam/Ghost Risk: *{scam_pct}%*\n"
         f"• Baseline Sim: `{(j.get('cosine_sim') or 0):.2f}`\n"
         f"• Persona Route: `{j.get('jev_persona', 'general')}`\n\n"
-        f"🔗 [Open Direct Application Page]({j['apply_url']})"
+        f"{apply_link_md}"
     )
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -350,7 +381,7 @@ async def send_single_job_card(j: dict, chat_id: int | None = None) -> int | Non
                     c.commit()
 
             await asyncio.to_thread(_mark_notified)
-            print(f"📲 Sent single rich card for [{j['company']}] {j['title']} (Job #{jid})", flush=True)
+            print(f"📲 Sent single rich card for [{company}] {title} (Job #{jid})", flush=True)
             return mid
     return None
 
