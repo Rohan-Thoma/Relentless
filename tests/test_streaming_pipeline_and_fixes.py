@@ -95,6 +95,8 @@ def test_gmail_lookback_days_and_body_peek(monkeypatch):
     search_queries_issued = []
     fetch_commands_issued = []
 
+    dynamic_date = (datetime.now(UTC) - timedelta(days=1)).strftime("%a, %d %b %Y %H:%M:%S +0000")
+
     def mock_uid(cmd, *args):
         if cmd == "search":
             search_queries_issued.append(args)
@@ -106,18 +108,18 @@ def test_gmail_lookback_days_and_body_peek(monkeypatch):
                 # Stage A RFC822 header response for both emails
                 # UID 101: Fresh email, not yet processed
                 hdr_1 = (
-                    b"Message-ID: <msg101@example.com>\r\n"
-                    b"Subject: Software Engineer Job Alert\r\n"
-                    b"From: alerts@linkedin.com\r\n"
-                    b"Date: Mon, 26 Oct 2026 12:00:00 +0000\r\n\r\n"
-                )
+                    f"Message-ID: <msg101@example.com>\r\n"
+                    f"Subject: Software Engineer Job Alert\r\n"
+                    f"From: alerts@linkedin.com\r\n"
+                    f"Date: {dynamic_date}\r\n\r\n"
+                ).encode()
                 # UID 102: Already processed email
                 hdr_2 = (
-                    b"Message-ID: <msg102@example.com>\r\n"
-                    b"Subject: ML Engineer Job Alert\r\n"
-                    b"From: alerts@linkedin.com\r\n"
-                    b"Date: Mon, 26 Oct 2026 12:00:00 +0000\r\n\r\n"
-                )
+                    f"Message-ID: <msg102@example.com>\r\n"
+                    f"Subject: ML Engineer Job Alert\r\n"
+                    f"From: alerts@linkedin.com\r\n"
+                    f"Date: {dynamic_date}\r\n\r\n"
+                ).encode()
                 return ("OK", [(b"1 (UID 101 ...)", hdr_1), (b"2 (UID 102 ...)", hdr_2)])
             elif "(BODY.PEEK[])" in fetch_type:
                 # Stage B full body
