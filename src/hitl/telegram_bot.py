@@ -222,7 +222,7 @@ async def upsert_job_rich_card(
             )
 
         # If media uploads exist, build embedded blocks (Bot API 10.1-10.3)
-        # instead of broken markdown hyperlinks referencing missing media IDs.
+        # Always embed photo/document when uploads exist, regardless of hyperlinks in text.
         if files_payload:
             blocks = []
 
@@ -233,24 +233,27 @@ async def upsert_job_rich_card(
                     # Links paragraph: keep hyperlinks, but embed media below
                     links_text = sec.replace("*", "")
                     blocks.append({"type": "paragraph", "text": links_text})
-                    if "form_shot_file" in files_payload:
-                        blocks.append({
-                            "type": "photo",
-                            "photo": {"type": "photo", "media": "attach://form_shot_file"},
-                            "caption": {"text": "📸 Application Form Preview"},
-                        })
-                    if "resume_pdf_file" in files_payload:
-                        blocks.append({
-                            "type": "document",
-                            "document": {"type": "document", "media": "attach://resume_pdf_file"},
-                            "caption": {"text": "📄 Download Tailored Resume PDF"},
-                        })
                 elif sec.startswith(("🎯 *Tailored", "👋 *Hey!", "🟢 *Website Check:", "🟡 *Website Check:")):
                     clean_sec = sec.replace("*", "")
                     blocks.append({"type": "paragraph", "text": clean_sec})
                 else:
                     clean_sec = sec.replace("*", "")
                     blocks.append({"type": "paragraph", "text": clean_sec})
+
+            # Always embed screenshot (submission evidence) and PDF (resume) if uploads exist
+            # This ensures every submit result message includes media, not just hyperlinks.
+            if "form_shot_file" in files_payload:
+                blocks.append({
+                    "type": "photo",
+                    "photo": {"type": "photo", "media": "attach://form_shot_file"},
+                    "caption": {"text": "📸 Application Form / Submit Evidence"},
+                })
+            if "resume_pdf_file" in files_payload:
+                blocks.append({
+                    "type": "document",
+                    "document": {"type": "document", "media": "attach://resume_pdf_file"},
+                    "caption": {"text": "📄 Download Tailored Resume PDF"},
+                })
 
         rich_msg_obj = {"blocks": blocks} if blocks else {"markdown": markdown_body}
 
