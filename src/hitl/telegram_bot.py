@@ -203,14 +203,11 @@ async def upsert_job_rich_card(
         # Path 2: sendRichMessage (deletes previous cards and creates 1 fresh unified card)
         await cleanup_job_messages(client, chat_id, job_id, extra_mid=clicked_mid)
 
-        media_items = []
+        # Build files payload and blocks when media is present
         files_payload = {}
+        blocks = None
 
         if screenshot_path and Path(screenshot_path).exists():
-            media_items.append({
-                "id": "form_shot",
-                "media": {"type": "photo", "media": "attach://form_shot_file"},
-            })
             files_payload["form_shot_file"] = (
                 Path(screenshot_path).name,
                 Path(screenshot_path).read_bytes(),
@@ -218,19 +215,47 @@ async def upsert_job_rich_card(
             )
 
         if pdf_path and Path(pdf_path).exists():
-            media_items.append({
-                "id": "resume_pdf",
-                "media": {"type": "document", "media": "attach://resume_pdf_file"},
-            })
             files_payload["resume_pdf_file"] = (
                 Path(pdf_path).name,
                 Path(pdf_path).read_bytes(),
                 "application/pdf",
             )
 
-        rich_msg_obj = {"markdown": markdown_body}
-        if media_items:
-            rich_msg_obj["media"] = media_items
+        # If media uploads exist, build embedded blocks (Bot API 10.1-10.3)
+        # instead of broken markdown hyperlinks referencing missing media IDs.
+        if files_payload:
+            blocks = []
+
+            # Reconstruct message sections from markdown_body for embedded block format
+            sections = [s.strip() for s in markdown_body.split("\n\n") if s.strip()]
+            for sec in sections:
+                if sec.startswith("[📸") or sec.startswith("[📄") or sec.startswith("[🌐"):
+                    # Links paragraph: keep hyperlinks, but embed media below
+                    links_text = sec.replace("*", "")
+                    blocks.append({"type": "paragraph", "text": links_text})
+                    if "form_shot_file" in files_payload:
+                        blocks.append({
+                            "type": "photo",
+                            "photo": {"type": "photo", "media": "attach://form_shot_file"},
+                            "caption": {"text": "📸 Application Form Preview"},
+                        })
+                    if "resume_pdf_file" in files_payload:
+                        blocks.append({
+                            "type": "document",
+                            "document": {"type": "document", "media": "attach://resume_pdf_file"},
+                            "caption": {"text": "📄 Download Tailored Resume PDF"},
+                        })
+                elif sec.startswith("🎯 *Tailored") or sec.startswith("👋 *Hey!"):
+                    clean_sec = sec.replace("*", "")
+                    blocks.append({"type": "paragraph", "text": clean_sec})
+                elif sec.startswith("🟢 *Website Check:") or sec.startswith("🟡 *Website Check:"):
+                    clean_sec = sec.replace("*", "")
+                    blocks.append({"type": "paragraph", "text": clean_sec})
+                else:
+                    clean_sec = sec.replace("*", "")
+                    blocks.append({"type": "paragraph", "text": clean_sec})
+
+        rich_msg_obj = {"blocks": blocks} if blocks else {"markdown": markdown_body}
 
         try:
             if files_payload:
