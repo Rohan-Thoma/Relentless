@@ -261,7 +261,13 @@ def consume_pending_action(raw_token: str, kind: str | None = None):
             return row
 
 
-def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload: dict | None = None, ttl_seconds: int = 300):
+def create_apply_confirmation(
+    job_id: int,
+    kind: str = "SUBMIT",
+    payload: dict | None = None,
+    ttl_seconds: int = 300,
+    created_by: str | None = None,
+):
     raw = secrets.token_urlsafe(32)
     token_hash = _hash_token(raw)
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
@@ -269,11 +275,11 @@ def create_apply_confirmation(job_id: int, kind: str = "SUBMIT", payload: dict |
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO apply_confirmations (token_hash, job_id, kind, payload, expires_at)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO apply_confirmations (token_hash, job_id, kind, payload, expires_at, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id;
                 """,
-                (token_hash, job_id, kind, Jsonb(payload or {}), expires_at),
+                (token_hash, job_id, kind, Jsonb(payload or {}), expires_at, created_by),
             )
         conn.commit()
     return raw, expires_at
@@ -285,7 +291,7 @@ def consume_apply_confirmation(raw_token: str, job_id: int | None = None, kind: 
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, job_id, kind, payload, expires_at, status
+                SELECT id, job_id, kind, payload, expires_at, status, created_by
                 FROM apply_confirmations
                 WHERE token_hash = %s AND status = 'PENDING'
                 FOR UPDATE;

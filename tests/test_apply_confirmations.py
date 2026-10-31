@@ -35,9 +35,16 @@ def test_confirmation_single_use():
             job_id = cur.fetchone()["id"]
         conn.commit()
     try:
-        raw, _ = create_apply_confirmation(job_id, kind="SUBMIT", payload={"pdf_sha256": "abc", "apply_url": "https://x"}, ttl_seconds=60)
+        raw, _ = create_apply_confirmation(
+            job_id,
+            kind="SUBMIT",
+            payload={"pdf_sha256": "abc", "apply_url": "https://x"},
+            ttl_seconds=60,
+            created_by="test-user-123",
+        )
         first = consume_apply_confirmation(raw, job_id=job_id, kind="SUBMIT")
         assert first is not None
+        assert first["created_by"] == "test-user-123"
         assert consume_apply_confirmation(raw, job_id=job_id, kind="SUBMIT") is None
     finally:
         with get_connection() as conn:
