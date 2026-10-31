@@ -360,43 +360,60 @@ async def submit_application(job, confirmation_token):
                     status = "FAILED"
                     error = "no submit button found after multi-strategy search"
                 else:
-                    # Pre-submit validation checks: detect visible validation errors / missing required fields
+                    # Pre-submit validation checks: detect visible validation errors / missing required fields (smart filtering)
                     pre_errors = []
                     try:
-                        content_before = (await page.content()).lower()
-                        validation_indicators = [
-                            "required", "missing", "please enter", "please fill", "field is required",
-                            "must be filled", "cannot be empty", "is empty", "incomplete", "invalid entry"
-                        ]
-                        has_validation_errors = any(ind in content_before for ind in validation_indicators)
-                        # Check for red-bordered / error-highlighted required fields
-                        error_fields = await page.query_selector_all(
-                            'input:invalid, select:invalid, textarea:invalid, input[aria-invalid="true"], .error, .invalid, [class*="error"], [class*="invalid"]'
+                        # Only check for actual visible validation UI patterns, not random keywords
+                        # Look for elements with error/invalid classes that contain error text
+                        error_containers = await page.query_selector_all(
+                            '.error, .invalid, [class*="error"], [class*="invalid"], [aria-invalid="true"]'
                         )
-                        visible_errors = [e for e in error_fields if await e.is_visible()]
-                        if has_validation_errors or len(visible_errors) > 0:
-                            pre_errors.append("visible validation errors detected before submit")
-                        # Check if any visible required inputs are empty
+                        visible_errors = []
+                        for ec in error_containers:
+                            if await ec.is_visible():
+                                text = await ec.inner_text() if hasattr(ec, 'inner_text') else (await ec.text_content() if hasattr(ec, 'text_content') else "")
+                                text_lower = (text or "").lower()
+                                # Only count if it contains actual error indicators
+                                if any(ind in text_lower for ind in ["required", "missing", "invalid", "error", "please", "empty", "fix"]):
+                                    visible_errors.append(ec)
+                        if len(visible_errors) > 0:
+                            pre_errors.append(f"visible validation errors detected before submit ({len(visible_errors)} elements)")
+                        # Check if any visible required inputs are empty (exclude file inputs which are handled separately)
                         required_empty = await page.evaluate("""() => {
                             const empties = [];
                             document.querySelectorAll('input, select, textarea').forEach(el => {
                                 if (el.closest('[style*="display: none"]') || el.closest('[style*="visibility: hidden"]')) return;
-                                const isVisible = !!(el.offsetParent && el.offsetWidth > 0 && el.offsetHeight > 0);
+                                const rect = el.getBoundingClientRect();
+                                const isVisible = rect.width > 0 && rect.height > 0 && !!(el.offsetParent);
                                 if (!isVisible) return;
-                                const isRequired = el.required || el.getAttribute('aria-required') === 'true' || el.classList.contains('required');
+                                const isRequired = el.required || el.getAttribute('aria-required') === 'true' || el.classList.contains('required') || el.closest('label, .form-group')?.querySelector('.required, [class*="required"]');
                                 const isFile = el.type === 'file';
+                                // Skip file inputs (resume upload handled separately)
+                                if (isFile) return;
                                 const isTextEmpty = (el.value || '').trim().length === 0;
                                 const isSelectEmpty = el.tagName === 'SELECT' && (!el.value || el.value === '' || el.selectedIndex === -1);
-                                if (isRequired && !isFile && (isTextEmpty || isSelectEmpty)) {
+                                if (isRequired && (isTextEmpty || isSelectEmpty)) {
                                     const label = el.closest('label, .form-group, .field, [class*="field"], tr, div');
                                     const labelText = label ? (label.innerText || label.getAttribute('aria-label') || '').trim() : '';
-                                    empties.push(labelText || el.name || el.id || 'unknown_field');
+                                    const lbl = labelText || el.name || el.id || 'field';
+                                    // Only add if it's a real field (not hidden or decorative)
+                                    empties.push(lbl);
                                 }
                             });
                             return empties;
                         }""")
-                        if required_empty and len(required_empty) > 0:
-                            pre_errors.append(f"empty required fields before submit: {', '.join(str(r) for r in required_empty[:3])}")
+                        # Filter out false positives (labels containing only decorative markers)
+                        filtered_empties = [r for r in (required_empty or []) if len(str(r)) > 2 and not str(r).startswith('field_') and not str(r).startswith('unknown')]
+                        # Only count clearly real empty fields (exclude decorative labels)
+                        real_empty_fields = []
+                        for r in filtered_empties:
+                            lbl_text = str(r).lower()
+                            # Skip decorative/placeholder-only labels
+                            if lbl_text in ['select', '--select--', '--select--'] or 'choose' in lbl_text or lbl_text.startswith('field_'):
+                                continue
+                            real_empty_fields.append(r)
+                        if real_empty_fields and len(real_empty_fields) > 0:
+                            pre_errors.append(f"empty required fields before submit: {', '.join(str(r) for r in real_empty_fields[:3])}")
                     except Exception as e:
                         logger.debug("Pre-submit validation check failed: %s", e)
 

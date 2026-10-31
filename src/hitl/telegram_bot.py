@@ -1038,6 +1038,83 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
             asyncio.create_task(asyncio.to_thread(run_distill))
         return
 
+    # Retry Submit: skip resume tailoring, re-attempt submission with existing PDF
+    if payload.startswith("retry_submit:"):
+        try:
+            job_id_retry = int(payload.split(":", 1)[1])
+        except ValueError:
+            return
+
+        await client.post(
+            f"{TG_BASE}/answerCallbackQuery",
+            json={"callback_query_id": cb_id, "text": "Retrying submission..."},
+        )
+
+        def _fetch_retry():
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT * FROM jobs WHERE id = %s;", (job_id_retry,))
+                r = cur.fetchone()
+                return dict(r) if r else None
+
+        retry_row = await asyncio.to_thread(_fetch_retry)
+        if retry_row:
+            retry_row["tailored_pdf_path"] = retry_row.get("tailored_pdf_path") or retry_row.get("pdf_path")
+            retry_row["tailored_pdf_sha256"] = retry_row.get("tailored_pdf_sha256")
+
+            async def _retry_submit():
+                try:
+                    token_retry, _ = await asyncio.to_thread(
+                        lambda: create_apply_confirmation(
+                            retry_row["id"],
+                            kind="SUBMIT",
+                            payload={
+                                "pdf_sha256": retry_row.get("tailored_pdf_sha256"),
+                                "apply_url": retry_row.get("apply_url"),
+                            },
+                            ttl_seconds=1800,
+                            created_by=str(chat_id),
+                        )
+                    )
+                    res_retry = await submit_application(retry_row, token_retry)
+                    st_retry = res_retry.get("status")
+                    err_retry = res_retry.get("error") or ""
+                    is_retry_success = st_retry == "SUBMITTED"
+                    result_retry = (
+                        f"{'🚀' if is_retry_success else '⚠️'} *Retry Submit Result for Job #{retry_row['id']} ({retry_row['company']}):* *{st_retry}*\n\n"
+                        f"{err_retry}\n"
+                        f"🔗 [Application Page]({retry_row['apply_url']})"
+                    )
+                    sub_retry_shots = [s for s in (res_retry.get("screenshots") or []) if Path(s).exists()]
+                    proof_retry = sub_retry_shots[-1] if sub_retry_shots else None
+                    buttons_retry = []
+                    if not is_retry_success:
+                        buttons_retry.append([{"text": "🔄 Retry / Review", "callback_data": f"retry_submit:{retry_row['id']}"}])
+                        buttons_retry.append([{"text": "✅ Mark Applied Manually", "callback_data": f"manual_applied:{retry_row['id']}"}])
+                    await upsert_job_rich_card(
+                        client=client,
+                        chat_id=chat_id,
+                        job_id=retry_row["id"],
+                        markdown_body=result_retry,
+                        inline_keyboard=buttons_retry if buttons_retry else None,
+                        screenshot_path=proof_retry,
+                        pdf_path=retry_row.get("tailored_pdf_path"),
+                        clicked_mid=clicked_mid,
+                    )
+                except Exception as e_retry:
+                    from src.notify import alert
+                    alert(f"⚠️ Retry submit failed for {retry_row.get('company', retry_row.get('id'))}: {e_retry}")
+                    await upsert_job_rich_card(
+                        client=client,
+                        chat_id=chat_id,
+                        job_id=retry_row["id"],
+                        markdown_body=f"⚠️ *Retry Submit Failed for Job #{retry_row['id']}*\n{e_retry}\n🔗 [Application Page]({retry_row.get('apply_url')})",
+                        inline_keyboard=[[{"text": "🔄 Retry / Review", "callback_data": f"retry_submit:{retry_row['id']}"}]],
+                        clicked_mid=clicked_mid,
+                    )
+
+            await _retry_submit()
+            return
+
     # Edit Prompt requested
     if payload.startswith("edit_prompt:"):
         try:
@@ -1223,7 +1300,7 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
 
                 buttons = []
                 if not is_success:
-                    buttons.append([{"text": "🔄 Retry / Review", "callback_data": f"interest:{job_id}"}])
+                    buttons.append([{"text": "🔄 Retry / Review", "callback_data": f"retry_submit:{job_id}"}])
                     buttons.append([{"text": "✅ Mark Applied Manually", "callback_data": f"manual_applied:{job_id}"}])
 
                 def _mark_done():
