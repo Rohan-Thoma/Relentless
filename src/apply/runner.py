@@ -316,52 +316,171 @@ async def submit_application(job, confirmation_token):
                 await page.goto(job["apply_url"], timeout=30000)
                 profile = get_master_profile()
                 fields_filled = await fill(page, job, profile)
-                submit = await page.query_selector(
-                    "button[type=submit], input[type=submit], button:has-text('Submit'), button:has-text('Apply')"
-                )
+                # Robust multi-strategy submit button detection + click
+                submit_selectors = [
+                    "button[type=submit]",
+                    "input[type=submit]",
+                    "button:has-text('Submit Application')",
+                    "button:has-text('Submit')",
+                    "button:has-text('Apply')",
+                    "a[role='button']:has-text('Submit')",
+                    "button[class*='submit']",
+                    "input[value*='Submit' i]",
+                ]
+                submit = None
+                for sel in submit_selectors:
+                    try:
+                        submit = await page.query_selector(sel)
+                        if submit and await submit.is_visible():
+                            break
+                        submit = None
+                    except Exception:
+                        submit = None
+
+                # Try to resolve the submit button within any active frame
+                if not submit:
+                    for frame in page.frames:
+                        if frame == page.main_frame:
+                            continue
+                        for sel in submit_selectors:
+                            try:
+                                submit = await frame.query_selector(sel)
+                                if submit and await submit.is_visible():
+                                    break
+                            except Exception:
+                                submit = None
+                        if submit:
+                            break
+
+                if not submit:
+                    # Try broader fallback selector (any visible button with submit/apply keywords)
+                    submit = await page.query_selector("button:has-text('Submit'), button:has-text('Apply'), input[type=submit]")
+
                 if not submit:
                     status = "FAILED"
-                    error = "no submit button"
+                    error = "no submit button found after multi-strategy search"
                 else:
-                    await submit.click()
-                    await page.wait_for_timeout(3000)
-                    sp = str(evidence_dir / "step_submitted.png")
-                    await page.screenshot(path=sp)
-                    screenshots.append(sp)
-                    final_url = page.url
-                    content = (await page.content()).lower()
+                    # Pre-submit validation checks: detect visible validation errors / missing required fields
+                    pre_errors = []
+                    try:
+                        content_before = (await page.content()).lower()
+                        validation_indicators = [
+                            "required", "missing", "please enter", "please fill", "field is required",
+                            "must be filled", "cannot be empty", "is empty", "incomplete", "invalid entry"
+                        ]
+                        has_validation_errors = any(ind in content_before for ind in validation_indicators)
+                        # Check for red-bordered / error-highlighted required fields
+                        error_fields = await page.query_selector_all(
+                            'input:invalid, select:invalid, textarea:invalid, input[aria-invalid="true"], .error, .invalid, [class*="error"], [class*="invalid"]'
+                        )
+                        visible_errors = [e for e in error_fields if await e.is_visible()]
+                        if has_validation_errors or len(visible_errors) > 0:
+                            pre_errors.append("visible validation errors detected before submit")
+                        # Check if any visible required inputs are empty
+                        required_empty = await page.evaluate("""() => {
+                            const empties = [];
+                            document.querySelectorAll('input, select, textarea').forEach(el => {
+                                if (el.closest('[style*="display: none"]') || el.closest('[style*="visibility: hidden"]')) return;
+                                const isVisible = !!(el.offsetParent && el.offsetWidth > 0 && el.offsetHeight > 0);
+                                if (!isVisible) return;
+                                const isRequired = el.required || el.getAttribute('aria-required') === 'true' || el.classList.contains('required');
+                                const isFile = el.type === 'file';
+                                const isTextEmpty = (el.value || '').trim().length === 0;
+                                const isSelectEmpty = el.tagName === 'SELECT' && (!el.value || el.value === '' || el.selectedIndex === -1);
+                                if (isRequired && !isFile && (isTextEmpty || isSelectEmpty)) {
+                                    const label = el.closest('label, .form-group, .field, [class*="field"], tr, div');
+                                    const labelText = label ? (label.innerText || label.getAttribute('aria-label') || '').trim() : '';
+                                    empties.push(labelText || el.name || el.id || 'unknown_field');
+                                }
+                            });
+                            return empties;
+                        }""")
+                        if required_empty and len(required_empty) > 0:
+                            pre_errors.append(f"empty required fields before submit: {', '.join(str(r) for r in required_empty[:3])}")
+                    except Exception as e:
+                        logger.debug("Pre-submit validation check failed: %s", e)
 
-                    login_markers = ["sign in", "log in", "password", "create an account"]
-                    captcha_markers = ["recaptcha", "hcaptcha", "turnstile", "cf-turnstile"]
-                    error_markers = ["required", "please fix", "invalid", "error", "missing"]
-                    confirm_markers = ["thank you", "application received", "submitted", "confirmation", "success"]
-                    has_login = any(m in content for m in login_markers)
-                    has_captcha = any(m in content for m in captcha_markers)
-                    has_error = any(m in content for m in error_markers)
-                    has_confirm = any(m in content for m in confirm_markers)
-                    url_changed = final_url and final_url != job["apply_url"]
-                    url_confirm = any(
-                        m in (final_url or "").lower() for m in ("thank", "confirm", "success", "submitted")
-                    )
-
-                    if has_captcha:
-                        verification = "captcha"
-                        status = "NEEDS_REVIEW"
-                        error = "captcha detected after submit"
-                    elif has_login:
-                        verification = "login_required"
-                        status = "NEEDS_REVIEW"
-                        error = "login required after submit"
-                    elif has_error and not has_confirm:
-                        verification = "validation_error"
+                    if pre_errors:
                         status = "FAILED"
-                        error = "form validation error after submit"
-                    elif has_confirm or url_confirm or (url_changed and not has_error):
-                        verification = "verified"
-                        status = "SUBMITTED"
+                        error = f"pre-submit validation failed: {'; '.join(pre_errors)}"
                     else:
-                        verification = "ambiguous"
-                        status = "NEEDS_REVIEW"
+                        # Before clicking: scroll button into view and wait for stability
+                        try:
+                            await submit.scroll_into_view_if_needed(timeout=5000)
+                        except Exception:
+                            pass
+                        try:
+                            await submit.wait_for_element_state("stable", timeout=15000)
+                        except Exception:
+                            pass
+
+                        # Capture pre-submit screenshot for debugging
+                        pre_submit_sp = str(evidence_dir / "step_before_submit.png")
+                        try:
+                            await page.screenshot(path=pre_submit_sp)
+                            screenshots.append(pre_submit_sp)
+                        except Exception:
+                            pass
+
+                        # Try standard click with retry
+                        click_ok = False
+                        for attempt in range(3):
+                            try:
+                                await submit.click(timeout=15000)
+                                click_ok = True
+                                break
+                            except Exception:
+                                # Fallback to JS click if Playwright click fails (element covered, etc.)
+                                try:
+                                    await submit.evaluate("el => el.click()")
+                                    click_ok = True
+                                    break
+                                except Exception:
+                                    await page.wait_for_timeout(500 + (attempt * 300))
+                                    continue
+
+                        if not click_ok:
+                            status = "FAILED"
+                            error = "submit button click failed after retries (visible/stable issue)"
+                        else:
+                            await page.wait_for_timeout(3000)
+                            sp = str(evidence_dir / "step_submitted.png")
+                            await page.screenshot(path=sp)
+                            screenshots.append(sp)
+                            final_url = page.url
+                            content = (await page.content()).lower()
+
+                        login_markers = ["sign in", "log in", "password", "create an account"]
+                        captcha_markers = ["recaptcha", "hcaptcha", "turnstile", "cf-turnstile"]
+                        error_markers = ["required", "please fix", "invalid", "error", "missing"]
+                        confirm_markers = ["thank you", "application received", "submitted", "confirmation", "success"]
+                        has_login = any(m in content for m in login_markers)
+                        has_captcha = any(m in content for m in captcha_markers)
+                        has_error = any(m in content for m in error_markers)
+                        has_confirm = any(m in content for m in confirm_markers)
+                        url_changed = final_url and final_url != job["apply_url"]
+                        url_confirm = any(
+                            m in (final_url or "").lower() for m in ("thank", "confirm", "success", "submitted")
+                        )
+
+                        if has_captcha:
+                            verification = "captcha"
+                            status = "NEEDS_REVIEW"
+                            error = "captcha detected after submit"
+                        elif has_login:
+                            verification = "login_required"
+                            status = "NEEDS_REVIEW"
+                            error = "login required after submit"
+                        elif has_error and not has_confirm:
+                            verification = "validation_error"
+                            status = "FAILED"
+                            error = "form validation error after submit"
+                        elif has_confirm or url_confirm or (url_changed and not has_error):
+                            verification = "verified"
+                            status = "SUBMITTED"
+                        else:
+                            verification = "ambiguous"
+                            status = "NEEDS_REVIEW"
                 await browser.close()
         except Exception as e:
             status = "FAILED"
