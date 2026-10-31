@@ -229,7 +229,7 @@ async def upsert_job_rich_card(
             # Reconstruct message sections from markdown_body for embedded block format
             sections = [s.strip() for s in markdown_body.split("\n\n") if s.strip()]
             for sec in sections:
-                if sec.startswith("[📸") or sec.startswith("[📄") or sec.startswith("[🌐"):
+                if sec.startswith(("[📸", "[📄", "[🌐")):
                     # Links paragraph: keep hyperlinks, but embed media below
                     links_text = sec.replace("*", "")
                     blocks.append({"type": "paragraph", "text": links_text})
@@ -245,10 +245,7 @@ async def upsert_job_rich_card(
                             "document": {"type": "document", "media": "attach://resume_pdf_file"},
                             "caption": {"text": "📄 Download Tailored Resume PDF"},
                         })
-                elif sec.startswith("🎯 *Tailored") or sec.startswith("👋 *Hey!"):
-                    clean_sec = sec.replace("*", "")
-                    blocks.append({"type": "paragraph", "text": clean_sec})
-                elif sec.startswith("🟢 *Website Check:") or sec.startswith("🟡 *Website Check:"):
+                elif sec.startswith(("🎯 *Tailored", "👋 *Hey!", "🟢 *Website Check:", "🟡 *Website Check:")):
                     clean_sec = sec.replace("*", "")
                     blocks.append({"type": "paragraph", "text": clean_sec})
                 else:
