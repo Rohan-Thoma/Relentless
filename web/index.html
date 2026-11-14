@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RELENTLESS — Personal Autonomous Job Hunting Agent</title>
+  <link rel="icon" type="image/png" href="/logos/1_Relentless_logo_gradient_lime.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="hud-shell">
+    <!-- Top Telemetry Bar -->
+    <header class="hud-topbar">
+      <a class="topbar-brand" href="/?view=dashboard" data-view="dashboard" title="Return to Mission Control">
+        <img src="/logos/1_Relentless_logo_gradient_lime.png" alt="Relentless Logo" class="brand-logo" />
+        <div>
+          <div class="brand-title">RELENTLESS</div>
+          <div class="brand-sub">PERSONAL AUTONOMOUS JOB HUNTING AGENT</div>
+        </div>
+      </a>
+
+      <div class="topbar-telemetry">
+        <div class="telemetry-pill" id="conn-pill" title="Backend connection & auth status">
+          <span class="status-dot dot-amber" id="conn-dot"></span>
+          <span id="conn-label">CONNECTING...</span>
+        </div>
+
+        <div class="telemetry-pill" id="auto-pill" title="Automation pause status">
+          <span class="status-dot dot-lime" id="auto-dot"></span>
+          <span id="auto-label">AUTO: ACTIVE</span>
+        </div>
+
+        <div class="telemetry-ticker" id="task-ticker" title="Live background workers & TASK_REGISTRY">
+          <span class="ticker-prefix">TASKS:</span>
+          <span id="ticker-text">IDLE — ALL THREADS NOMINAL</span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="btn btn-purple" id="btn-top-digest" title="Send pending top jobs digest to Telegram">
+          ⚡ DIGEST
+        </button>
+        <button class="btn btn-purple" id="btn-top-distill" title="Distill human decisions into OKF Knowledge Brain">
+          🧠 DISTILL OKF
+        </button>
+        <button class="btn btn-warn" id="btn-top-pause" title="Toggle 24h Automation Pause">
+          ⏸ PAUSE 24H
+        </button>
+        <button class="btn btn-outline" id="btn-top-auth" title="Configure Auth Key or Backend Endpoint">
+          🔑 AUTH
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Body: Left Nav Rail + Active Workspace -->
+    <div class="hud-body">
+      <aside class="hud-nav" aria-label="Primary Navigation">
+        <div class="nav-section-label">MODULES</div>
+        <a class="nav-item active" href="/?view=dashboard" data-view="dashboard">
+          <span class="nav-code">01</span>
+          <span class="nav-text">MISSION CONTROL</span>
+          <span class="nav-badge" id="nav-badge-inbox">0</span>
+        </a>
+        <a class="nav-item" href="/?view=pipeline" data-view="pipeline">
+          <span class="nav-code">02</span>
+          <span class="nav-text">JOBS PIPELINE</span>
+          <span class="nav-badge" id="nav-badge-total">0</span>
+        </a>
+        <a class="nav-item" href="/?view=studio" data-view="studio">
+          <span class="nav-code">03</span>
+          <span class="nav-text">APPLICATION STUDIO</span>
+          <span class="nav-badge badge-purple" id="nav-badge-studio">—</span>
+        </a>
+        <a class="nav-item" href="/?view=okf" data-view="okf">
+          <span class="nav-code">04</span>
+          <span class="nav-text">OKF BRAIN</span>
+          <span class="nav-badge" id="nav-badge-okf">0</span>
+        </a>
+        <a class="nav-item" href="/?view=eval" data-view="eval">
+          <span class="nav-code">05</span>
+          <span class="nav-text">ML CALIBRATION</span>
+          <span class="nav-badge" id="nav-badge-eval">n=0</span>
+        </a>
+        <a class="nav-item" href="/?view=config" data-view="config">
+          <span class="nav-code">06</span>
+          <span class="nav-text">CONFIG &amp; VAULT</span>
+        </a>
+        <a class="nav-item" href="/?view=info" data-view="info">
+          <span class="nav-code">07</span>
+          <span class="nav-text">SYSTEM GUIDE</span>
+        </a>
+
+        <div class="nav-footer-telemetry">
+          <div class="telemetry-kv">
+            <span>POLL CADENCE</span>
+            <strong id="poll-interval-label">12s</strong>
+          </div>
+          <div class="telemetry-kv">
+            <span>ACTIVE TASKS</span>
+            <strong id="active-task-count">0</strong>
+          </div>
+          <div class="telemetry-kv">
+            <span>LAST SYNC</span>
+            <strong id="last-sync-label">—</strong>
+          </div>
+          <button class="btn btn-sm btn-outline full-width" id="btn-manual-sync">
+            ↻ FORCE SYNC NOW
+          </button>
+          <div class="nav-tip">
+            Tip: <code>Ctrl+Click</code> any job or module link to open in a new browser tab.
+          </div>
+        </div>
+      </aside>
+
+      <main class="hud-workspace">
+        <!-- VIEW 1: MISSION CONTROL -->
+        <section class="view-panel active" id="view-dashboard">
+          <div class="view-header">
+            <div>
+              <h1>01 // MISSION CONTROL</h1>
+              <p class="view-sub">Funnel KPIs, priority unreviewed matches, and live worker telemetry.</p>
+            </div>
+            <div class="view-actions">
+              <a class="btn btn-lime" href="/?view=pipeline" data-view="pipeline">OPEN FULL PIPELINE →</a>
+            </div>
+          </div>
+
+          <div class="subtab-bar" data-subtab-group="dashboard">
+            <button class="subtab-btn active" data-subtab="overview">OVERVIEW &amp; PRIORITY INBOX</button>
+            <button class="subtab-btn" data-subtab="telemetry">LIVE WORKERS &amp; STAGE FUNNEL</button>
+          </div>
+
+          <div class="subpage active" id="dash-sub-overview">
+            <div class="kpi-grid" id="dash-kpis"></div>
+
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">PRIORITY UNREVIEWED TARGETS (TOP TRIAGE MATCHES)</span>
+                <div class="card-header-actions">
+                  <button class="btn btn-sm btn-outline" id="btn-dash-refresh-priority">↻ REFRESH</button>
+                </div>
+              </div>
+              <div class="card-body" id="dash-priority-jobs"></div>
+            </div>
+          </div>
+
+          <div class="subpage" id="dash-sub-telemetry">
+            <div class="dash-split">
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">LIVE TASK REGISTRY &amp; PRODUCERS</span>
+                  <span class="mono-tag" id="dash-inflight-tag">0 IN-FLIGHT</span>
+                </div>
+                <div class="card-body" id="dash-live-tasks"></div>
+              </div>
+
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">PIPELINE STAGE TELEMETRY</span>
+                  <span class="mono-tag">POSTGRES SYNCED</span>
+                </div>
+                <div class="card-body" id="dash-stage-bars"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 2: JOBS PIPELINE -->
+        <section class="view-panel" id="view-pipeline">
+          <div class="view-header">
+            <div>
+              <h1>02 // JOBS PIPELINE</h1>
+              <p class="view-sub">Kanban workflow board and dense ledger synced with Telegram HITL. Use Ctrl+Click on any job to open in new tabs.</p>
+            </div>
+            <div class="view-actions segmented-control">
+              <button class="seg-btn active" id="mode-kanban">◫ KANBAN</button>
+              <button class="seg-btn" id="mode-table">☰ TABLE</button>
+            </div>
+          </div>
+
+          <div class="hud-card filter-bar">
+            <div class="filter-stages" id="pipeline-stage-pills">
+              <button class="pill-btn active" data-stage="">ALL</button>
+              <button class="pill-btn" data-stage="UNREVIEWED">UNREVIEWED</button>
+              <button class="pill-btn" data-stage="IN_PROGRESS">IN PROGRESS</button>
+              <button class="pill-btn" data-stage="READY_FOR_REVIEW">READY FOR REVIEW</button>
+              <button class="pill-btn" data-stage="APPLIED">APPLIED</button>
+              <button class="pill-btn" data-stage="CALLBACK">CALLBACK</button>
+              <button class="pill-btn" data-stage="SKIPPED">SKIPPED</button>
+            </div>
+
+            <div class="filter-inputs">
+              <input type="text" id="filter-search" class="hud-input" placeholder="Search company, role, location..." />
+              <select id="filter-tier" class="hud-select" aria-label="Filter by Fit Tier">
+                <option value="">All Fit Tiers</option>
+                <option value="dream_role">dream_role</option>
+                <option value="strong_fit">strong_fit</option>
+                <option value="moderate_fit">moderate_fit</option>
+                <option value="weak_fit">weak_fit</option>
+                <option value="reject">reject</option>
+              </select>
+              <select id="filter-ats" class="hud-select" aria-label="Filter by Source ATS">
+                <option value="">All Sources</option>
+                <option value="greenhouse">greenhouse</option>
+                <option value="lever">lever</option>
+                <option value="ashby">ashby</option>
+                <option value="workday">workday</option>
+                <option value="smartrecruiters">smartrecruiters</option>
+                <option value="linkedin">linkedin</option>
+                <option value="indeed">indeed</option>
+                <option value="naukri">naukri</option>
+                <option value="wellfound">wellfound</option>
+                <option value="remotive">remotive</option>
+                <option value="himalayas">himalayas</option>
+              </select>
+              <select id="filter-limit" class="hud-select" aria-label="Result Limit">
+                <option value="50">Limit 50</option>
+                <option value="100" selected>Limit 100</option>
+                <option value="200">Limit 200</option>
+              </select>
+              <button class="btn btn-purple" id="btn-pipeline-refresh">↻ APPLY</button>
+            </div>
+          </div>
+
+          <div class="pipeline-meta-row">
+            <span id="pipeline-count-label" class="mono-tag">0 JOBS MATCHING FILTERS</span>
+            <div class="pagination-controls">
+              <button class="btn btn-sm btn-outline" id="btn-page-prev">◀ PREV</button>
+              <span id="page-indicator" class="mono-tag">PAGE 1</span>
+              <button class="btn btn-sm btn-outline" id="btn-page-next">NEXT ▶</button>
+            </div>
+          </div>
+
+          <div id="pipeline-content"></div>
+        </section>
+
+        <!-- VIEW 3: APPLICATION STUDIO -->
+        <section class="view-panel" id="view-studio">
+          <div class="view-header">
+            <div class="studio-title-wrap">
+              <h1>03 // APPLICATION STUDIO</h1>
+              <p class="view-sub" id="studio-subtitle">Select any job from Mission Control or Jobs Pipeline to inspect, tailor, edit, and submit.</p>
+            </div>
+            <div class="view-actions studio-picker">
+              <input type="number" id="studio-jump-id" class="hud-input input-xs" placeholder="Job #ID" min="1" />
+              <button class="btn btn-purple" id="btn-studio-load-id">LOAD #ID</button>
+              <button class="btn btn-outline" id="btn-studio-refresh">↻ REFRESH</button>
+            </div>
+          </div>
+
+          <div id="studio-empty" class="hud-card empty-state">
+            <div class="empty-title">NO TARGET JOB LOADED IN STUDIO</div>
+            <p>Enter a Job ID above or click <strong>🔬 STUDIO</strong> on any job card (or <code>Ctrl+Click</code> to open multiple jobs across tabs).</p>
+          </div>
+
+          <div id="studio-workbench" class="hidden">
+            <div class="hud-card studio-banner" id="studio-banner"></div>
+
+            <div class="studio-grid">
+              <div class="studio-col-left">
+                <div class="hud-card studio-pane">
+                  <div class="card-header">
+                    <div class="segmented-control small">
+                      <button class="seg-btn active" data-studio-left="intel">SCORECARD &amp; DIFF</button>
+                      <button class="seg-btn" data-studio-left="jd">JOB DESCRIPTION</button>
+                      <button class="seg-btn" data-studio-left="events">APPLY &amp; OUTCOME LOG</button>
+                    </div>
+                  </div>
+                  <div class="card-body studio-scroll" id="studio-left-content"></div>
+                </div>
+
+                <div class="hud-card edit-prompt-card">
+                  <div class="card-header">
+                    <span class="card-title">SURGICAL RESUME REVISION PROMPT</span>
+                    <span class="mono-tag">LLM + ATS VERIFIER</span>
+                  </div>
+                  <div class="card-body">
+                    <textarea id="studio-edit-note" class="hud-textarea" rows="3"
+                      placeholder="Give surgical edit instructions (e.g., 'Highlight PyTorch inference latency reduction and mirror FastAPI + Redis keywords')."></textarea>
+                    <div class="edit-actions-row">
+                      <span class="hint-text">Triggers asynchronous resume regeneration &amp; ATS re-scoring.</span>
+                      <button class="btn btn-lime" id="btn-studio-send-edit">✨ APPLY EDIT &amp; REGENERATE PDF</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="studio-col-right">
+                <div class="hud-card studio-pane tall">
+                  <div class="card-header">
+                    <div class="segmented-control small">
+                      <button class="seg-btn active" data-studio-right="pdf">📄 TAILORED PDF</button>
+                      <button class="seg-btn" data-studio-right="shots">📸 PLAYWRIGHT SHOTS (<span id="shot-count-tab">0</span>)</button>
+                      <button class="seg-btn" data-studio-right="json">🧬 RESUME JSON</button>
+                    </div>
+                    <div class="card-header-actions">
+                      <button class="btn btn-sm btn-outline" id="btn-studio-reload-media">↻ RELOAD</button>
+                      <button class="btn btn-sm btn-purple" id="btn-studio-download-pdf">⬇ PDF</button>
+                    </div>
+                  </div>
+                  <div class="card-body studio-media-body" id="studio-right-content"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 4: OKF BRAIN -->
+        <section class="view-panel" id="view-okf">
+          <div class="view-header">
+            <div>
+              <h1>04 // OKF KNOWLEDGE BRAIN</h1>
+              <p class="view-sub">Explore connected career intelligence via Obsidian-style Graph View or edit individual OKF concepts.</p>
+            </div>
+            <div class="view-actions">
+              <button class="btn btn-purple" id="btn-okf-distill">🧠 DISTILL SIGNALS</button>
+              <button class="btn btn-lime" id="btn-okf-new">➕ NEW CONCEPT</button>
+            </div>
+          </div>
+
+          <div class="subtab-bar" data-subtab-group="okf">
+            <button class="subtab-btn active" data-subtab="graph">☍ OBSIDIAN GRAPH VIEW</button>
+            <button class="subtab-btn" data-subtab="list">☰ CONCEPT EXPLORER &amp; EDITOR</button>
+            <button class="subtab-btn" data-subtab="signals">◈ DISTILLED SIGNALS SUMMARY</button>
+          </div>
+
+          <div class="subpage active" id="okf-sub-graph">
+            <div class="okf-graph-layout">
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">INTERACTIVE CONCEPT GRAPH (DRAG NODES / SCROLL TO ZOOM)</span>
+                  <div class="card-header-actions">
+                    <button class="btn btn-sm btn-outline" id="btn-graph-zoom-in">＋</button>
+                    <button class="btn btn-sm btn-outline" id="btn-graph-zoom-out">－</button>
+                    <button class="btn btn-sm btn-outline" id="btn-graph-relayout">↻ RE-HEAT PHYSICS</button>
+                    <button class="btn btn-sm btn-outline" id="btn-graph-reset">⟲ RESET VIEW</button>
+                  </div>
+                </div>
+                <div class="okf-graph-wrap">
+                  <canvas id="okf-graph-canvas"></canvas>
+                  <div class="okf-graph-legend">
+                    <span class="legend-item"><span class="status-dot dot-purple"></span> Hub / Machine-Confirmed</span>
+                    <span class="legend-item"><span class="status-dot dot-lime"></span> Human-Reviewed</span>
+                    <span class="legend-item"><span class="status-dot dot-amber"></span> Unverified</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">NODE INSPECTOR</span>
+                  <span class="mono-tag" id="graph-node-count">0 NODES</span>
+                </div>
+                <div class="card-body okf-inspector-body" id="okf-graph-detail">
+                  <div class="empty-state">
+                    <div class="empty-title">SELECT A NODE IN THE GRAPH</div>
+                    <p>Click any concept or hub node to inspect its Markdown knowledge, tags, and connections.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subpage" id="okf-sub-list">
+            <div class="hud-card filter-bar">
+              <div class="filter-inputs">
+                <input type="text" id="okf-search" class="hud-input" placeholder="Search concepts, skills, scam patterns, company notes..." />
+                <select id="okf-type-filter" class="hud-select">
+                  <option value="">All Concept Types</option>
+                  <option value="Preference">Preference</option>
+                  <option value="Scam Pattern">Scam Pattern</option>
+                  <option value="Market Signal">Market Signal</option>
+                  <option value="Market Insight">Market Insight</option>
+                  <option value="Strategy">Strategy</option>
+                  <option value="Company Note">Company Note</option>
+                </select>
+                <button class="btn btn-purple" id="btn-okf-search">🔍 QUERY BRAIN</button>
+              </div>
+            </div>
+
+            <div class="okf-split">
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">CONCEPT INDEX</span>
+                  <span class="mono-tag" id="okf-list-count">0 CONCEPTS</span>
+                </div>
+                <div class="card-body okf-list-scroll" id="okf-concept-list"></div>
+              </div>
+
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title" id="okf-editor-title">CONCEPT EDITOR</span>
+                  <span class="mono-tag" id="okf-editor-tier">HUMAN:OWNER SIGN-OFF</span>
+                </div>
+                <div class="card-body">
+                  <form id="okf-form" class="hud-form">
+                    <div class="form-row-2">
+                      <label class="field">
+                        <span>CONCEPT PATH (UNIQUE KEY)</span>
+                        <input type="text" id="okf-input-path" class="hud-input" required placeholder="e.g. preferences/target-comp" />
+                      </label>
+                      <label class="field">
+                        <span>CONCEPT TYPE</span>
+                        <input type="text" id="okf-input-type" class="hud-input" required placeholder="Preference, Scam Pattern, Market Signal..." />
+                      </label>
+                    </div>
+                    <label class="field">
+                      <span>NAME / TITLE</span>
+                      <input type="text" id="okf-input-name" class="hud-input" placeholder="Human-readable concept title" />
+                    </label>
+                    <div class="field">
+                      <span>TAGS (CLICK PILL TO EDIT OR + TO ADD)</span>
+                      <div class="tag-box" id="okf-tags-box" data-tag-box="okf-tags-box" data-tag-label="Concept Tags"></div>
+                    </div>
+                    <label class="field">
+                      <span>DESCRIPTION</span>
+                      <input type="text" id="okf-input-desc" class="hud-input" placeholder="Short summary for semantic retrieval" />
+                    </label>
+                    <label class="field">
+                      <span>MARKDOWN BODY</span>
+                      <textarea id="okf-input-body" class="hud-textarea mono" rows="9" required placeholder="# Rules or distilled observations..."></textarea>
+                    </label>
+                    <div class="form-actions">
+                      <button type="button" class="btn btn-danger hidden" id="btn-okf-delete">🗑 DELETE CONCEPT</button>
+                      <button type="submit" class="btn btn-lime">💾 SAVE &amp; FLUSH TO NEON</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subpage" id="okf-sub-signals">
+            <div class="kpi-grid compact" id="okf-summary-cards"></div>
+          </div>
+        </section>
+
+        <!-- VIEW 5: ML CALIBRATION -->
+        <section class="view-panel" id="view-eval">
+          <div class="view-header">
+            <div>
+              <h1>05 // ML CALIBRATION &amp; EVAL LAB</h1>
+              <p class="view-sub">Ground-truth Precision@K, 95% Wilson Confidence Intervals, Brier Calibration, and ATS channel yield.</p>
+            </div>
+            <div class="view-actions">
+              <button class="btn btn-purple" id="btn-eval-refresh">↻ RECOMPUTE METRICS</button>
+            </div>
+          </div>
+
+          <div class="subtab-bar" data-subtab-group="eval">
+            <button class="subtab-btn active" data-subtab="overview">PRECISION@K &amp; BRIER SKILL</button>
+            <button class="subtab-btn" data-subtab="sources">ATS YIELD &amp; EVAL HISTORY</button>
+            <button class="subtab-btn" data-subtab="report">RAW MARKDOWN REPORT</button>
+          </div>
+
+          <div class="subpage active" id="eval-sub-overview">
+            <div class="kpi-grid" id="eval-kpis"></div>
+
+            <div class="dash-split">
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">PRECISION@K: SYSTEM-1 JEV VS COSINE BASELINE</span>
+                  <span class="mono-tag" id="eval-k-badge">K=10</span>
+                </div>
+                <div class="card-body" id="eval-precision-bars"></div>
+              </div>
+
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">PROBABILITY CALIBRATION (BRIER SKILL)</span>
+                  <span class="mono-tag">LOWER BRIER = BETTER</span>
+                </div>
+                <div class="card-body" id="eval-brier-box"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subpage" id="eval-sub-sources">
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">ATS CHANNEL APPROVAL YIELD</span>
+                <span class="mono-tag">PER-SOURCE BREAKDOWN</span>
+              </div>
+              <div class="card-body" id="eval-source-table"></div>
+            </div>
+
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">HISTORICAL EVAL RUNS</span>
+                <span class="mono-tag">eval_runs</span>
+              </div>
+              <div class="card-body" id="eval-history-table"></div>
+            </div>
+          </div>
+
+          <div class="subpage" id="eval-sub-report">
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">RAW EVALUATION REPORT</span>
+                <span class="mono-tag">MARKDOWN TERMINAL</span>
+              </div>
+              <div class="card-body">
+                <pre class="terminal-pre" id="eval-markdown-pre">Loading evaluation report...</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 6: CONFIG & VAULT (Structured Forms with Tag Pills & Calendar Pickers) -->
+        <section class="view-panel" id="view-config">
+          <div class="view-header">
+            <div>
+              <h1>06 // CONFIG, PROFILE &amp; VAULT</h1>
+              <p class="view-sub">Manage your Neon-backed candidate profile, automation rules, and security controls via validated forms.</p>
+            </div>
+            <div class="view-actions">
+              <button class="btn btn-purple" id="btn-cfg-reload">↻ RELOAD FROM NEON</button>
+            </div>
+          </div>
+
+          <div class="subtab-bar" data-subtab-group="config">
+            <button class="subtab-btn active" data-subtab="profile">👤 CANDIDATE PROFILE</button>
+            <button class="subtab-btn" data-subtab="engine">⚙️ ENGINE &amp; DISCOVERY CONFIG</button>
+            <button class="subtab-btn" data-subtab="vault">🛡️ AUTOMATION &amp; DB VAULT</button>
+            <button class="subtab-btn" data-subtab="raw">🔧 ADVANCED RAW JSON</button>
+          </div>
+
+          <!-- Config Page 1: Candidate Profile & Resume Filler Form -->
+          <div class="subpage active" id="cfg-sub-profile">
+            <form id="cfg-profile-form" class="hud-card">
+              <div class="card-header">
+                <span class="card-title">CANDIDATE MASTER PROFILE &amp; RESUME FILLER</span>
+                <button type="submit" class="btn btn-lime" id="btn-save-profile-form">💾 SAVE CANDIDATE PROFILE</button>
+              </div>
+              <div class="card-body hud-form">
+                <div class="form-section-title"><span>1. IDENTITY &amp; CONTACT LINKS</span></div>
+                <div class="form-grid-3">
+                  <label class="field">
+                    <span>FULL NAME</span>
+                    <input type="text" id="pf-name" class="hud-input" required />
+                  </label>
+                  <label class="field">
+                    <span>EMAIL ADDRESS</span>
+                    <input type="email" id="pf-email" class="hud-input" required />
+                  </label>
+                  <label class="field">
+                    <span>PHONE NUMBER</span>
+                    <input type="text" id="pf-phone" class="hud-input" />
+                  </label>
+                </div>
+                <div class="form-grid-3">
+                  <label class="field">
+                    <span>LOCATION DISPLAY</span>
+                    <input type="text" id="pf-location" class="hud-input" placeholder="Hyderabad, India (Open to Remote)" />
+                  </label>
+                  <label class="field">
+                    <span>LINKEDIN URL</span>
+                    <input type="text" id="pf-linkedin" class="hud-input" placeholder="linkedin.com/in/username" />
+                  </label>
+                  <label class="field">
+                    <span>GITHUB URL</span>
+                    <input type="text" id="pf-github" class="hud-input" placeholder="github.com/username" />
+                  </label>
+                </div>
+
+                <div class="form-section-title"><span>2. CORE SKILLS &amp; EXECUTIVE SUMMARY</span></div>
+                <div class="field">
+                  <span>CORE SKILLS (CLICK ANY SKILL PILL TO EDIT OR + TO ADD)</span>
+                  <div class="tag-box" id="pf-skills-box" data-tag-box="pf-skills-box" data-tag-label="Core Skills"></div>
+                </div>
+                <label class="field">
+                  <span>EXPERIENCE SUMMARY</span>
+                  <textarea id="pf-summary" class="hud-textarea" rows="3"></textarea>
+                </label>
+
+                <div class="form-section-title">
+                  <span>3. EXPERIENCE HISTORY (CALENDAR DATES + INDIVIDUAL BULLET ROWS)</span>
+                  <button type="button" class="btn btn-sm btn-purple" id="btn-pf-add-exp">+ ADD ROLE</button>
+                </div>
+                <div id="pf-experience-list" class="repeatable-list"></div>
+
+                <div class="form-section-title">
+                  <span>4. EDUCATION (CALENDAR DATES)</span>
+                  <button type="button" class="btn btn-sm btn-purple" id="btn-pf-add-edu">+ ADD EDUCATION</button>
+                </div>
+                <div id="pf-education-list" class="repeatable-list"></div>
+
+                <div class="form-section-title">
+                  <span>5. PLAYWRIGHT APPLICATION DEFAULTS</span>
+                  <button type="button" class="btn btn-sm btn-purple" id="btn-pf-sync-defaults">↻ AUTO-FILL FROM PROFILE ABOVE</button>
+                </div>
+                <div class="form-grid-3">
+                  <label class="field"><span>FIRST NAME</span><input type="text" id="pf-def-first-name" class="hud-input" /></label>
+                  <label class="field"><span>LAST NAME</span><input type="text" id="pf-def-last-name" class="hud-input" /></label>
+                  <label class="field"><span>FORM FULL NAME</span><input type="text" id="pf-def-full-name" class="hud-input" /></label>
+                  <label class="field"><span>CURRENT COMPANY</span><input type="text" id="pf-def-current-company" class="hud-input" /></label>
+                  <label class="field"><span>CURRENT TITLE</span><input type="text" id="pf-def-current-title" class="hud-input" /></label>
+                  <label class="field"><span>HIGHEST EDUCATION</span><input type="text" id="pf-def-highest-edu" class="hud-input" /></label>
+                  <label class="field"><span>TOTAL EXPERIENCE (YRS)</span><input type="number" step="0.5" min="0" id="pf-def-total-exp" class="hud-input" /></label>
+                  <label class="field"><span>RELEVANT EXPERIENCE (YRS)</span><input type="number" step="0.5" min="0" id="pf-def-rel-exp" class="hud-input" /></label>
+                  <label class="field"><span>CURRENT CITY</span><input type="text" id="pf-def-city" class="hud-input" /></label>
+                  <label class="field"><span>COUNTRY</span><input type="text" id="pf-def-country" class="hud-input" /></label>
+                  <label class="field">
+                    <span>WILLING TO RELOCATE</span>
+                    <select id="pf-def-relocate" class="hud-select">
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                      <option value="Open to Discussion">Open to Discussion</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>AUTHORIZED TO WORK (IN)</span>
+                    <select id="pf-def-auth-india" class="hud-select">
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>REQUIRES VISA SPONSORSHIP</span>
+                    <select id="pf-def-visa" class="hud-select">
+                      <option value="No">No</option>
+                      <option value="Yes">Yes</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>NOTICE PERIOD LABEL</span>
+                    <select id="pf-def-notice" class="hud-select">
+                      <option value="Immediate">Immediate</option>
+                      <option value="15 days">15 days</option>
+                      <option value="30 days (Negotiable / Immediate)">30 days (Negotiable / Immediate)</option>
+                      <option value="30 days">30 days</option>
+                      <option value="60 days">60 days</option>
+                      <option value="90 days">90 days</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>NOTICE PERIOD DAYS</span><input type="number" step="1" min="0" id="pf-def-notice-days" class="hud-input" /></label>
+                  <label class="field"><span>CURRENT CTC (LPA)</span><input type="text" id="pf-def-curr-ctc" class="hud-input" /></label>
+                  <label class="field"><span>EXPECTED CTC (LPA)</span><input type="text" id="pf-def-exp-ctc" class="hud-input" /></label>
+                  <label class="field">
+                    <span>GENDER DISCLOSURE</span>
+                    <select id="pf-def-gender" class="hud-select">
+                      <option value="Decline to self-identify">Decline to self-identify</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Non-binary">Non-binary</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>VETERAN STATUS</span>
+                    <select id="pf-def-veteran" class="hud-select">
+                      <option value="I am not a protected veteran">I am not a protected veteran</option>
+                      <option value="Decline to self-identify">Decline to self-identify</option>
+                      <option value="I identify as one or more of the classifications">I identify as one or more of the classifications</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>DISABILITY STATUS</span>
+                    <select id="pf-def-disability" class="hud-select">
+                      <option value="No, I do not have a disability">No, I do not have a disability</option>
+                      <option value="I do not wish to answer">I do not wish to answer</option>
+                      <option value="Yes, I have a disability">Yes, I have a disability</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="form-actions">
+                  <span class="hint-text">Structured inputs guarantee clean JSON serialization into app_settings.master_profile.</span>
+                  <button type="submit" class="btn btn-lime">💾 SAVE CANDIDATE PROFILE</button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <!-- Config Page 2: Engine & Discovery Config Form -->
+          <div class="subpage" id="cfg-sub-engine">
+            <form id="cfg-engine-form" class="hud-card">
+              <div class="card-header">
+                <span class="card-title">ENGINE &amp; DISCOVERY CONFIGURATION (AppConfig)</span>
+                <button type="submit" class="btn btn-lime" id="btn-save-engine-form">💾 SAVE ENGINE CONFIG</button>
+              </div>
+              <div class="card-body hud-form">
+                <div class="form-section-title"><span>1. AUTOMATION &amp; SUBMISSION GUARDRAILS</span></div>
+                <div class="form-grid-3">
+                  <label class="field">
+                    <span>APPLY MODE</span>
+                    <select id="ec-auto-apply-mode" class="hud-select">
+                      <option value="DRY_RUN">DRY_RUN (Fill &amp; capture screenshots only)</option>
+                      <option value="AUTO_CONFIRM">AUTO_CONFIRM (Submit only after confirm)</option>
+                      <option value="MANUAL">MANUAL (No auto form execution)</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>DAILY APPLICATION CAP</span>
+                    <input type="number" id="ec-auto-daily-cap" class="hud-input" min="0" />
+                  </label>
+                  <label class="field">
+                    <span>COMPANY COOLDOWN (HOURS)</span>
+                    <input type="number" id="ec-auto-cooldown" class="hud-input" min="0" />
+                  </label>
+                  <label class="field">
+                    <span>MIN FIT PROBABILITY (0.0 – 1.0)</span>
+                    <input type="number" id="ec-auto-min-fit" class="hud-input" min="0" max="1" step="0.01" />
+                  </label>
+                  <label class="field">
+                    <span>MAX FREE-TEXT QUESTIONS</span>
+                    <input type="number" id="ec-auto-max-free" class="hud-input" min="0" />
+                  </label>
+                </div>
+                <div class="field">
+                  <span>ALLOWED APPLY DOMAINS (CLICK PILL TO EDIT OR + TO ADD)</span>
+                  <div class="tag-box" id="ec-auto-allowed-domains-box" data-tag-box="ec-auto-allowed-domains-box" data-tag-label="Allowed Apply Domains"></div>
+                </div>
+                <div class="checkbox-row">
+                  <label class="checkbox-field"><input type="checkbox" id="ec-auto-first-confirm" /> Require First-Company Confirmation</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-tier-dream" /> Tier: dream_role</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-tier-strong" /> Tier: strong_fit</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-tier-moderate" /> Tier: moderate_fit</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-tier-weak" /> Tier: weak_fit</label>
+                </div>
+
+                <div class="form-section-title"><span>2. CANDIDATE TARGETING PREFERENCES</span></div>
+                <div class="form-grid-3">
+                  <div class="field">
+                    <span>TARGET ROLE KEYWORDS</span>
+                    <div class="tag-box" id="ec-pref-roles-box" data-tag-box="ec-pref-roles-box" data-tag-label="Target Role Keywords"></div>
+                  </div>
+                  <div class="field">
+                    <span>EXCLUDE TITLE KEYWORDS</span>
+                    <div class="tag-box" id="ec-pref-excludes-box" data-tag-box="ec-pref-excludes-box" data-tag-label="Exclude Title Keywords"></div>
+                  </div>
+                  <div class="field">
+                    <span>ALLOWED LOCATIONS</span>
+                    <div class="tag-box" id="ec-pref-locations-box" data-tag-box="ec-pref-locations-box" data-tag-label="Allowed Locations"></div>
+                  </div>
+                </div>
+
+                <div class="form-section-title"><span>3. INGESTION &amp; TRIAGE PIPELINE</span></div>
+                <div class="form-grid-2">
+                  <label class="field"><span>TRIAGE CONCURRENCY</span><input type="number" id="ec-ing-concurrency" class="hud-input" min="1" max="20" /></label>
+                  <label class="field"><span>MAX JOB AGE (DAYS)</span><input type="number" id="ec-ing-max-age" class="hud-input" min="1" /></label>
+                </div>
+                <div class="checkbox-row">
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-prioritize" /> Prioritize Scraping</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-scrape-only" /> Scrape Only (Skip Triage/Notify)</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-ats" /> Enable ATS Pollers</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-jobboards" /> Enable Jobboards Poller</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-gmail" /> Enable Gmail Alerts Scanner</label>
+                </div>
+
+                <div class="form-section-title"><span>4. JOBBOARDS &amp; GMAIL SCANNER</span></div>
+                <div class="form-grid-3">
+                  <div class="field">
+                    <span>JOBBOARD SITES</span>
+                    <div class="tag-box" id="ec-jb-sites-box" data-tag-box="ec-jb-sites-box" data-tag-label="Jobboard Sites"></div>
+                  </div>
+                  <div class="field">
+                    <span>SEARCH TERMS</span>
+                    <div class="tag-box" id="ec-jb-terms-box" data-tag-box="ec-jb-terms-box" data-tag-label="Jobboard Search Terms"></div>
+                  </div>
+                  <div class="field">
+                    <span>JOBBOARD LOCATIONS</span>
+                    <div class="tag-box" id="ec-jb-locations-box" data-tag-box="ec-jb-locations-box" data-tag-label="Jobboard Locations"></div>
+                  </div>
+                  <label class="field"><span>RESULTS WANTED / QUERY</span><input type="number" id="ec-jb-wanted" class="hud-input" min="1" /></label>
+                  <label class="field"><span>MAX BOARD AGE (HOURS)</span><input type="number" id="ec-jb-hours-old" class="hud-input" min="1" /></label>
+                  <label class="field"><span>GMAIL LABEL</span><input type="text" id="ec-gm-label" class="hud-input" /></label>
+                  <label class="field"><span>GMAIL LOOKBACK (DAYS)</span><input type="number" id="ec-gm-lookback" class="hud-input" min="1" /></label>
+                  <label class="field"><span>GMAIL MAX AGE (HOURS)</span><input type="number" id="ec-gm-max-age" class="hud-input" min="1" /></label>
+                  <label class="field"><span>GMAIL POLL INTERVAL (MIN)</span><input type="number" id="ec-gm-poll" class="hud-input" min="1" /></label>
+                </div>
+                <div class="field">
+                  <span>GMAIL SENDER KEYWORDS</span>
+                  <div class="tag-box" id="ec-gm-senders-box" data-tag-box="ec-gm-senders-box" data-tag-label="Gmail Sender Keywords"></div>
+                </div>
+
+                <div class="form-section-title">
+                  <span>5. DIRECT ATS COMPANY TARGETS</span>
+                  <button type="button" class="btn btn-sm btn-purple" id="btn-ec-add-workday">+ ADD WORKDAY CXS</button>
+                </div>
+                <div class="form-grid-3">
+                  <div class="field">
+                    <span>GREENHOUSE SLUGS</span>
+                    <div class="tag-box" id="ec-ats-greenhouse-box" data-tag-box="ec-ats-greenhouse-box" data-tag-label="Greenhouse Slugs"></div>
+                  </div>
+                  <div class="field">
+                    <span>LEVER SLUGS</span>
+                    <div class="tag-box" id="ec-ats-lever-box" data-tag-box="ec-ats-lever-box" data-tag-label="Lever Slugs"></div>
+                  </div>
+                  <div class="field">
+                    <span>ASHBY SLUGS</span>
+                    <div class="tag-box" id="ec-ats-ashby-box" data-tag-box="ec-ats-ashby-box" data-tag-label="Ashby Slugs"></div>
+                  </div>
+                  <div class="field">
+                    <span>SMARTRECRUITERS SLUGS</span>
+                    <div class="tag-box" id="ec-ats-smartrecruiters-box" data-tag-box="ec-ats-smartrecruiters-box" data-tag-label="SmartRecruiters Slugs"></div>
+                  </div>
+                  <div class="field">
+                    <span>RECRUITEE SLUGS</span>
+                    <div class="tag-box" id="ec-ats-recruitee-box" data-tag-box="ec-ats-recruitee-box" data-tag-label="Recruitee Slugs"></div>
+                  </div>
+                </div>
+                <div id="ec-workday-list" class="repeatable-list"></div>
+
+                <div class="form-actions">
+                  <span class="hint-text">Validated against Pydantic AppConfig schema before persisting to Neon.</span>
+                  <button type="submit" class="btn btn-lime">💾 SAVE ENGINE CONFIG</button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <!-- Config Page 3: Automation Pause & Danger Zone Vault -->
+          <div class="subpage" id="cfg-sub-vault">
+            <div class="dash-split">
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">AUTOMATION PAUSE CONTROLLER</span>
+                  <span class="mono-tag" id="cfg-pause-badge">ACTIVE</span>
+                </div>
+                <div class="card-body">
+                  <p class="muted-copy" id="cfg-pause-desc">Autonomous Playwright submission is currently active according to your daily cap rules.</p>
+                  <div class="pause-controls">
+                    <select id="cfg-pause-hours" class="hud-select">
+                      <option value="1">Pause 1 Hour</option>
+                      <option value="6">Pause 6 Hours</option>
+                      <option value="12">Pause 12 Hours</option>
+                      <option value="24" selected>Pause 24 Hours</option>
+                      <option value="72">Pause 72 Hours</option>
+                      <option value="168">Pause 7 Days</option>
+                    </select>
+                    <button class="btn btn-warn" id="btn-cfg-pause">⏸ ACTIVATE PAUSE</button>
+                    <button class="btn btn-lime" id="btn-cfg-resume">▶ RESUME NOW</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="hud-card danger-zone">
+                <div class="card-header">
+                  <span class="card-title text-crimson">DANGER ZONE // DATABASE RESET</span>
+                  <span class="mono-tag">REQUIRES CONFIRMATION</span>
+                </div>
+                <div class="card-body">
+                  <p class="muted-copy">Reset human labels, wipe triage scores for re-evaluation, or factory-reset the entire jobs table.</p>
+                  <div class="reset-controls">
+                    <select id="cfg-reset-mode" class="hud-select">
+                      <option value="labels">labels — Clear human labels only (keep Jev scores)</option>
+                      <option value="triage">triage — Clear Jev scores &amp; labels (keep scraped JDs)</option>
+                      <option value="all">all — Wipe ALL jobs, events &amp; reset ID #1</option>
+                    </select>
+                    <input type="text" id="cfg-reset-confirm" class="hud-input" placeholder="Type CONFIRM RESET" />
+                    <button class="btn btn-danger" id="btn-cfg-reset">☢ EXECUTE RESET</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Config Page 4: Advanced Raw JSON -->
+          <div class="subpage" id="cfg-sub-raw">
+            <div class="config-grid">
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">RAW MASTER PROFILE (JSON)</span>
+                  <span class="mono-tag">app_settings.master_profile</span>
+                </div>
+                <div class="card-body">
+                  <textarea id="cfg-profile-editor" class="hud-textarea mono code-editor" rows="16" spellcheck="false"></textarea>
+                  <div class="form-actions">
+                    <span class="hint-text" id="cfg-profile-status">Power-user raw JSON view synced with form.</span>
+                    <button class="btn btn-lime" id="btn-save-profile">💾 SAVE RAW PROFILE</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="hud-card">
+                <div class="card-header">
+                  <span class="card-title">RAW ENGINE CONFIG (AppConfig JSON)</span>
+                  <span class="mono-tag">app_settings.config_yaml</span>
+                </div>
+                <div class="card-body">
+                  <textarea id="cfg-yaml-editor" class="hud-textarea mono code-editor" rows="16" spellcheck="false"></textarea>
+                  <div class="form-actions">
+                    <span class="hint-text" id="cfg-yaml-status">Validated via Pydantic AppConfig on save.</span>
+                    <button class="btn btn-lime" id="btn-save-config">💾 SAVE RAW CONFIG</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 7: SYSTEM GUIDE & INFO PAGE -->
+        <section class="view-panel" id="view-info">
+          <div class="view-header">
+            <div>
+              <h1>07 // SYSTEM GUIDE &amp; ARCHITECTURE</h1>
+              <p class="view-sub">Documentation, multi-tab workflow tips, security design, and CLI reference for Relentless.</p>
+            </div>
+          </div>
+
+          <div class="guide-grid">
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">1. END-TO-END AUTONOMOUS PIPELINE</span>
+                <span class="mono-tag">5 STAGES</span>
+              </div>
+              <div class="card-body">
+                <ol class="guide-list">
+                  <li><strong>Discovery (<code>DISCOVERED</code>):</strong> Polls Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Jobboards, and Gmail alerts with SHA-256 deduplication into Neon PostgreSQL.</li>
+                  <li><strong>System-1 Jev Triage:</strong> Evaluates scam risk, fit tier (<code>dream_role</code> to <code>reject</code>), calibrated fit probability, and persona match against your <code>master_profile</code>.</li>
+                  <li><strong>Resume Synthesis &amp; ATS Scorecard:</strong> Clicking <code>🎯 Tailor</code> generates a surgical diff + Typst PDF and computes Before/After ATS keyword match scores.</li>
+                  <li><strong>Playwright Form Pre-Check (<code>READY_FOR_REVIEW</code>):</strong> Inspects the target ATS portal and captures live form screenshots before any submission happens.</li>
+                  <li><strong>Human Confirmation &amp; Submit (<code>APPLIED</code> → <code>CALLBACK</code>):</strong> Nothing submits without explicit confirmation via Web or Telegram.</li>
+                </ol>
+              </div>
+            </div>
+
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">2. MULTI-TAB WORKFLOW &amp; SHORTCUTS</span>
+                <span class="mono-tag">PRODUCTIVITY</span>
+              </div>
+              <div class="card-body">
+                <ul class="guide-list">
+                  <li><strong>Parallel Job Review:</strong> Hold <code>Ctrl+Click</code> (Windows/Linux) or <code>Cmd+Click</code> (macOS) on any job title or <code>🔬 STUDIO</code> button in Mission Control or Jobs Pipeline to inspect multiple jobs in separate browser tabs simultaneously.</li>
+                  <li><strong>Cross-Channel Sync:</strong> Actions taken in the Web Command Center automatically update your Telegram cards and <code>TASK_REGISTRY</code> in real time.</li>
+                  <li><strong>Direct URL Deep-Linking:</strong> Share or bookmark <code>/?view=studio&amp;job=123</code> or <code>/?view=okf</code> to jump directly into any screen.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">3. OKF KNOWLEDGE BRAIN &amp; CALIBRATION</span>
+                <span class="mono-tag">CONTINUAL LEARNING</span>
+              </div>
+              <div class="card-body">
+                <ul class="guide-list">
+                  <li><strong>Obsidian Graph Mode:</strong> Visualize clusters of your <code>Preference</code>, <code>Scam Pattern</code>, and <code>Market Signal</code> nodes in <code>04 // OKF BRAIN</code>. Drag nodes, zoom with scroll, and click any node to read or edit its Markdown knowledge.</li>
+                  <li><strong>Trust Tiers:</strong> Concepts promoted by you get <code>human-reviewed</code> (lime) authority; distilled signals are <code>machine-confirmed</code> (light purple).</li>
+                  <li><strong>Eval Harness (<code>05 // ML CALIBRATION</code>):</strong> Measures Jev Precision@K vs Cosine Baseline with 95% Wilson CIs and Brier Skill Score (BSS).</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">4. SECURITY ARCHITECTURE &amp; CLI</span>
+                <span class="mono-tag">ZERO MAINTENANCE</span>
+              </div>
+              <div class="card-body">
+                <ul class="guide-list">
+                  <li><strong>Two-Layer Zero-CVE Design:</strong> Vanilla HTML/CSS/ES6 frontend (zero npm dependencies) hosted on a <strong>Netlify Private Project</strong> + Deno Edge Proxy (<code>api_proxy.ts</code>) injecting <code>X-Relentless-Api-Key</code> server-side.</li>
+                  <li><strong>Backend Protections:</strong> Constant-time key verification, HMAC-SHA256 <code>HttpOnly</code> session cookies, 5-attempt / 15-min IP brute-force lockout with Telegram alerts, and explicit DB reset confirmation.</li>
+                  <li><strong>CLI Commands:</strong> Run <code>python manage.py web</code> for Web UI only, <code>python manage.py run</code> for full background pipeline + Telegram + Web, <code>python manage.py doctor</code> for diagnostics, and <code>python manage.py sync</code> to push local JSON/YAML to Neon.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Interactive Tag Add / Edit Modal -->
+  <div class="modal-backdrop hidden" id="tag-modal" role="dialog" aria-modal="true" aria-labelledby="tag-modal-title">
+    <div class="hud-card modal-card">
+      <div class="card-header">
+        <span class="card-title" id="tag-modal-title">ADD TAG</span>
+        <button class="btn btn-sm btn-outline" id="btn-close-tag-modal">✕</button>
+      </div>
+      <div class="card-body">
+        <form id="tag-modal-form" class="hud-form">
+          <label class="field">
+            <span id="tag-modal-field-label">TAG VALUE</span>
+            <input type="text" id="tag-modal-input" class="hud-input" required placeholder="Type exact word or phrase..." />
+          </label>
+          <div class="form-actions">
+            <button type="button" class="btn btn-danger hidden" id="btn-tag-delete">🗑 DELETE TAG</button>
+            <button type="button" class="btn btn-outline" id="btn-tag-cancel">CANCEL</button>
+            <button type="submit" class="btn btn-lime" id="btn-tag-submit">ADD TAG</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth & Endpoint Modal -->
+  <div class="modal-backdrop hidden" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+    <div class="hud-card modal-card">
+      <div class="card-header">
+        <span class="card-title" id="auth-modal-title">SECURITY ACCESS // AUTH &amp; BACKEND</span>
+        <button class="btn btn-sm btn-outline" id="btn-close-auth">✕</button>
+      </div>
+      <div class="card-body">
+        <p class="muted-copy" id="auth-modal-desc">
+          Connect via Netlify Private Project proxy (default same-origin <code>/api/*</code>), direct Railway endpoint, or localhost server.
+        </p>
+        <form id="auth-form" class="hud-form">
+          <label class="field">
+            <span>BACKEND BASE URL (LEAVE BLANK FOR SAME-ORIGIN / NETLIFY PROXY)</span>
+            <input type="url" id="auth-backend-url" class="hud-input" placeholder="e.g. https://your-app.up.railway.app" />
+          </label>
+          <label class="field">
+            <span>ACCESS PASSWORD OR WEB_API_KEY</span>
+            <input type="password" id="auth-secret-input" class="hud-input" placeholder="Enter WEB_ADMIN_PASSWORD or WEB_API_KEY" />
+          </label>
+          <label class="checkbox-field">
+            <input type="checkbox" id="auth-use-header" />
+            <span>Also send X-Relentless-Api-Key header (recommended when connecting cross-origin from static host)</span>
+          </label>
+          <div class="form-actions">
+            <button type="button" class="btn btn-outline" id="btn-auth-logout">LOGOUT SESSION</button>
+            <button type="submit" class="btn btn-lime">🔓 AUTHENTICATE &amp; CONNECT</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto-Submit Confirmation Modal -->
+  <div class="modal-backdrop hidden" id="submit-modal" role="dialog" aria-modal="true" aria-labelledby="submit-modal-title">
+    <div class="hud-card modal-card">
+      <div class="card-header">
+        <span class="card-title" id="submit-modal-title">CONFIRM AUTONOMOUS SUBMISSION</span>
+        <button class="btn btn-sm btn-outline" id="btn-close-submit">✕</button>
+      </div>
+      <div class="card-body">
+        <p class="muted-copy" id="submit-modal-summary"></p>
+        <div class="form-actions">
+          <button type="button" class="btn btn-outline" id="btn-cancel-submit">CANCEL</button>
+          <button type="button" class="btn btn-lime" id="btn-confirm-submit">🚀 CONFIRM &amp; AUTO-SUBMIT NOW</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screenshot Lightbox Modal -->
+  <div class="modal-backdrop hidden" id="lightbox-modal" role="dialog" aria-modal="true">
+    <div class="hud-card lightbox-card">
+      <div class="card-header">
+        <span class="card-title" id="lightbox-title">PLAYWRIGHT FORM EVIDENCE</span>
+        <button class="btn btn-sm btn-outline" id="btn-close-lightbox">✕ CLOSE</button>
+      </div>
+      <div class="card-body lightbox-body">
+        <img id="lightbox-img" src="" alt="Playwright form screenshot" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Stack -->
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

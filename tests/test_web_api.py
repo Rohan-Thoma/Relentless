@@ -329,3 +329,45 @@ async def test_jobs_okf_settings_and_actions_endpoints(monkeypatch, tmp_path):
         )
         assert r_reset.status_code == 200
         assert r_reset.json()["mode"] == "labels"
+
+
+# ==============================================================================
+# 5. Obsidian Static Assets, Design Guardrails & Path Traversal Guard
+# ==============================================================================
+@pytest.mark.asyncio
+async def test_web_static_assets_and_path_traversal_guard():
+    async with _make_client("127.0.0.1") as client:
+        index_resp = await client.get("/")
+        assert index_resp.status_code == 200
+        assert "text/html" in index_resp.headers["content-type"]
+        assert "RELENTLESS" in index_resp.text
+        assert "PERSONAL AUTONOMOUS JOB HUNTING AGENT" in index_resp.text
+        assert "CYBER-HUD" not in index_resp.text
+        assert "cfg-profile-form" in index_resp.text
+        assert "okf-graph-canvas" in index_resp.text
+        assert "view-info" in index_resp.text
+        assert "tag-modal" in index_resp.text
+        assert "1_Relentless_logo_gradient_lime.png" in index_resp.text
+
+        logo_resp = await client.get("/logos/1_Relentless_logo_gradient_lime.png")
+        assert logo_resp.status_code == 200
+        assert "image/png" in logo_resp.headers["content-type"]
+
+        css_resp = await client.get("/styles.css")
+        assert css_resp.status_code == 200
+        assert "text/css" in css_resp.headers["content-type"]
+        assert "backdrop-filter" not in css_resp.text
+        assert "box-shadow" not in css_resp.text
+
+        js_resp = await client.get("/app.js")
+        assert js_resp.status_code == 200
+        assert "javascript" in js_resp.headers["content-type"]
+        assert "/api/status" in js_resp.text
+
+        spa_resp = await client.get("/studio")
+        assert spa_resp.status_code == 200
+        assert "text/html" in spa_resp.headers["content-type"]
+
+        traversal_resp = await client.get("/../pyproject.toml")
+        assert traversal_resp.status_code in (403, 404)
+
