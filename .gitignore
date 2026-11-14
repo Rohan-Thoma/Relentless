@@ -13,3 +13,5 @@ node_modules/
 agent_scratch_pad/
 .vscode/settings.json
 project_env_info.md
+.netlify/
+
