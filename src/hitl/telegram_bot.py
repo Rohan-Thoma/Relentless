@@ -166,6 +166,15 @@ async def upsert_job_rich_card(
     Guarantees exactly ONE active message in the DM for this job_id at all times.
     Bundles rich markdown, embedded photo preview, downloadable PDF, and inline keyboard.
     """
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        try:
+            cid_int = int(chat_id) if chat_id is not None else 0
+        except (TypeError, ValueError):
+            cid_int = 0
+        active_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or BOT_TOKEN
+        if cid_int == 0 or not active_token:
+            return None
+
     async with _get_job_lock(job_id):
         # Path 1: Fast text-only in-place update for progress states
         if try_edit_text_only and not screenshot_path and not pdf_path:
