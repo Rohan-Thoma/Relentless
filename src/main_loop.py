@@ -208,7 +208,12 @@ async def main(
         if enable_ats and not ats_only:
             coros.append(_ats_producer_loop())
 
-        print("🚀 Starting Relentless Unified Pipeline (Telegram Bot + Concurrent Streaming Producers)...", flush=True)
+        if os.getenv("ENABLE_WEB_SERVER", "1").lower() not in ("0", "false", "no"):
+            from src.web.api import run_web_server
+
+            coros.append(run_web_server())
+
+        print("🚀 Starting Relentless Unified Pipeline (Telegram Bot + Web API + Concurrent Streaming Producers)...", flush=True)
         await asyncio.gather(*coros)
 
 

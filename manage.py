@@ -149,7 +149,8 @@ Usage:
   python manage.py reset triage   # Medium Reset: clear Jev scores + clicks to re-score scraped jobs
   python manage.py reset all      # Factory Reset: wipe all scraped jobs and restart IDs at #1
   python manage.py eval           # Print live Precision@K, Wilson 95% CIs, and Brier calibration table
-  python manage.py run            # Unified Command: Starts Telegram bot + streaming producers concurrently
+  python manage.py run            # Unified Command: Starts Telegram bot + Web API + streaming producers concurrently
+  python manage.py web            # Start standalone Web Command Center API & UI server
   python manage.py run --scrape-only # Fast Mode: Scrapes Job boards & Gmail only (skips slow ATS)
   python manage.py run --ats-only    # ATS Only: Scans only company ATS endpoints
   python manage.py run --once        # Run single pipeline iteration and exit
@@ -222,6 +223,13 @@ if __name__ == "__main__":
     elif cmd == "bot":
         print("🤖 Starting Telegram bot listener ONLY (independent of ingestion pipeline)...")
         asyncio.run(listen_for_button_clicks())
+    elif cmd == "web":
+        from src.web.api import run_web_server
+
+        init_db()
+        hydrate()
+        print("🌐 Starting Relentless Web Command Center API...")
+        asyncio.run(run_web_server())
     elif cmd == "distill":
         init_db()
         hydrate()
