@@ -7,8 +7,144 @@
   <link rel="icon" type="image/png" href="/logos/1_Relentless_logo_gradient_lime.png" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
-  <div class="hud-shell">
+<body class="auth-checking">
+  <!-- Full-Screen Security Gate (Blocks Dashboard UI until Authenticated) -->
+  <section class="auth-gate" id="auth-gate" aria-label="Relentless Authentication Gate">
+    <div class="auth-gate-frame">
+      <div class="auth-gate-telemetry">
+        <span class="mono-tag auth-tag-purple">GATEWAY // AUTH_V2</span>
+        <span class="mono-tag">PROTOCOL // TLS + HMAC-SHA256</span>
+      </div>
+
+      <div class="hud-card auth-gate-card">
+        <div class="auth-gate-grid">
+          <!-- Left Identity & Security Posture Panel -->
+          <div class="auth-brand-pane">
+            <div class="auth-logo-crest">
+              <span class="crest-tick crest-tr"></span>
+              <span class="crest-tick crest-bl"></span>
+              <img
+                src="/logos/1_Relentless_logo_gradient_lime.png"
+                alt="Relentless Logo"
+                class="auth-hero-logo"
+              />
+            </div>
+
+            <div class="auth-brand-copy">
+              <div class="auth-wordmark">RELENTLESS</div>
+              <div class="auth-tagline">PERSONAL AUTONOMOUS JOB HUNTING AGENT</div>
+            </div>
+
+            <div class="auth-spec-list">
+              <div class="auth-spec-row">
+                <span>ACCESS TIER</span>
+                <strong class="text-purple">SINGLE-OWNER</strong>
+              </div>
+              <div class="auth-spec-row">
+                <span>CREDENTIAL</span>
+                <strong class="text-lime">PASSWORD OR WEB_API_KEY</strong>
+              </div>
+              <div class="auth-spec-row">
+                <span>SESSION TTL</span>
+                <strong>7 DAYS // HTTPONLY</strong>
+              </div>
+              <div class="auth-spec-row">
+                <span>LOCKOUT GUARD</span>
+                <strong>5 TRIES → 15M BAN + TG</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Authentication Terminal -->
+          <div class="auth-form-pane">
+            <div class="auth-terminal-head">
+              <span class="card-title">SECURITY TERMINAL // UNLOCK</span>
+              <span class="telemetry-pill auth-status-pill" id="gate-status-pill">
+                <span class="status-dot dot-amber" id="gate-status-dot"></span>
+                <span id="gate-status-text">VERIFYING...</span>
+              </span>
+            </div>
+
+            <div class="auth-checking-panel" id="gate-checking-panel">
+              <div class="checking-bar"></div>
+              <div class="checking-title">ESTABLISHING SESSION STATE</div>
+              <p class="muted-copy">
+                Checking active session cookie, local host dev mode, or Netlify edge proxy credentials...
+              </p>
+            </div>
+
+            <form id="gate-form" class="hud-form auth-gate-form" novalidate>
+              <p class="auth-lead-copy">
+                Enter your <code>WEB_ADMIN_PASSWORD</code> or <code>WEB_API_KEY</code> to unlock Mission Control, Pipeline, Resume Studio, and Vault settings.
+              </p>
+
+              <div class="auth-error-banner hidden" id="gate-error-banner" role="alert"></div>
+
+              <label class="field">
+                <span>ACCESS PASSWORD OR WEB_API_KEY</span>
+                <div class="secret-input-wrap">
+                  <input
+                    type="password"
+                    id="gate-secret-input"
+                    class="hud-input"
+                    autocomplete="current-password"
+                    required
+                    placeholder="Paste WEB_API_KEY or password..."
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline secret-toggle-btn"
+                    id="btn-gate-toggle-secret"
+                    aria-label="Toggle secret visibility"
+                  >
+                    SHOW
+                  </button>
+                </div>
+                <span class="field-hint">Signs in with a 7-day encrypted HttpOnly cookie on this domain.</span>
+              </label>
+
+              <button type="submit" class="btn btn-lime auth-submit-btn" id="btn-gate-submit">
+                🔓 UNLOCK COMMAND CENTER →
+              </button>
+
+              <details class="auth-advanced" id="gate-advanced">
+                <summary>⚙ Custom Backend Endpoint / Cross-Origin Settings</summary>
+                <div class="auth-advanced-body">
+                  <label class="field">
+                    <span>BACKEND BASE URL (OPTIONAL — LEAVE BLANK FOR THIS DOMAIN)</span>
+                    <input
+                      type="url"
+                      id="gate-backend-url"
+                      class="hud-input"
+                      placeholder="Leave blank for Railway direct or Netlify /api/* proxy"
+                    />
+                  </label>
+                  <label class="checkbox-field">
+                    <input type="checkbox" id="gate-use-header" />
+                    <span>Send <code>X-Relentless-Api-Key</code> header (cross-origin static hosts)</span>
+                  </label>
+                  <div class="auth-advanced-actions">
+                    <button type="button" class="btn btn-sm btn-outline" id="btn-gate-recheck">
+                      ↻ RE-CHECK PROXY / SESSION
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline" id="btn-gate-reset-endpoint">
+                      RESET TO SAME-ORIGIN
+                    </button>
+                  </div>
+                </div>
+              </details>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-gate-footer">
+        <span>ALL /api/* ENDPOINTS PROTECTED BY CONSTANT-TIME KEY VERIFICATION &amp; IP LOCKOUT</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="hud-shell" id="hud-shell">
     <!-- Top Telemetry Bar -->
     <header class="hud-topbar">
       <a class="topbar-brand" href="/?view=dashboard" data-view="dashboard" title="Return to Mission Control">
@@ -985,17 +1121,18 @@
     </div>
   </div>
 
-  <!-- Auth & Endpoint Modal -->
+  <!-- Authenticated Session & Endpoint Settings Modal -->
   <div class="modal-backdrop hidden" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
     <div class="hud-card modal-card">
       <div class="card-header">
-        <span class="card-title" id="auth-modal-title">SECURITY ACCESS // AUTH &amp; BACKEND</span>
+        <span class="card-title" id="auth-modal-title">SESSION &amp; CONNECTION SETTINGS</span>
         <button class="btn btn-sm btn-outline" id="btn-close-auth">✕</button>
       </div>
       <div class="card-body">
         <p class="muted-copy" id="auth-modal-desc">
-          Connect via Netlify Private Project proxy (default same-origin <code>/api/*</code>), direct Railway endpoint, or localhost server.
+          Manage your active session, re-authenticate, or point this UI to a custom Railway / localhost backend URL.
         </p>
+        <div class="auth-error-banner hidden" id="modal-error-banner" role="alert"></div>
         <form id="auth-form" class="hud-form">
           <label class="field">
             <span>BACKEND BASE URL (LEAVE BLANK FOR SAME-ORIGIN / NETLIFY PROXY)</span>
@@ -1010,8 +1147,8 @@
             <span>Also send X-Relentless-Api-Key header (recommended when connecting cross-origin from static host)</span>
           </label>
           <div class="form-actions">
-            <button type="button" class="btn btn-outline" id="btn-auth-logout">LOGOUT SESSION</button>
-            <button type="submit" class="btn btn-lime">🔓 AUTHENTICATE &amp; CONNECT</button>
+            <button type="button" class="btn btn-danger" id="btn-auth-logout">🔒 LOCK &amp; LOGOUT</button>
+            <button type="submit" class="btn btn-lime" id="btn-auth-submit">UPDATE &amp; VERIFY</button>
           </div>
         </form>
       </div>

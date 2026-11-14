@@ -348,6 +348,9 @@ async def test_web_static_assets_and_path_traversal_guard():
         assert "view-info" in index_resp.text
         assert "tag-modal" in index_resp.text
         assert "1_Relentless_logo_gradient_lime.png" in index_resp.text
+        assert 'id="auth-gate"' in index_resp.text
+        assert 'id="gate-form"' in index_resp.text
+        assert 'class="auth-checking"' in index_resp.text
 
         logo_resp = await client.get("/logos/1_Relentless_logo_gradient_lime.png")
         assert logo_resp.status_code == 200

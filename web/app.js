@@ -24,7 +24,6 @@ const state = {
 
   authenticated: false,
   authMode: "unknown",
-  authPromptedOnce: false,
 
   systemStatus: null,
   pollTimer: null,
@@ -444,6 +443,86 @@ function buildApiUrl(path) {
   return `${state.backendUrl}${path}`;
 }
 
+function formatAuthErrorMessage(rawMessage) {
+  const text = String(rawMessage || "").trim();
+  if (text === "INVALID_CREDENTIALS") {
+    return "Invalid password or WEB_API_KEY.";
+  }
+  if (text === "TOO_MANY_ATTEMPTS") {
+    return "Too many failed attempts (5 max). IP locked for 15 minutes.";
+  }
+  return text || "Authentication failed.";
+}
+
+function setBannerError(bannerEl, message) {
+  if (!bannerEl) return;
+  const msg = String(message || "").trim();
+  if (msg) {
+    bannerEl.textContent = msg;
+    bannerEl.classList.remove("hidden");
+  } else {
+    bannerEl.textContent = "";
+    bannerEl.classList.add("hidden");
+  }
+}
+
+function setAuthScreenState(mode, errorMessage = "") {
+  document.body.classList.remove("auth-checking", "auth-locked", "auth-unlocked");
+  document.body.classList.add(`auth-${mode}`);
+
+  const dot = $("gate-status-dot");
+  const textEl = $("gate-status-text");
+  if (dot && textEl) {
+    if (mode === "unlocked") {
+      dot.className = "status-dot dot-lime";
+      textEl.textContent = "UNLOCKED";
+    } else if (mode === "checking") {
+      dot.className = "status-dot dot-amber";
+      textEl.textContent = "VERIFYING...";
+    } else {
+      dot.className = "status-dot dot-red";
+      textEl.textContent = "LOCKED";
+    }
+  }
+
+  setBannerError($("gate-error-banner"), errorMessage);
+
+  if (mode === "locked") {
+    if ($("gate-backend-url")) $("gate-backend-url").value = state.backendUrl;
+    if ($("gate-use-header")) $("gate-use-header").checked = state.useApiHeader;
+    if ($("gate-advanced") && state.backendUrl) {
+      $("gate-advanced").open = true;
+    }
+    window.requestAnimationFrame(() => {
+      if ($("gate-secret-input")) $("gate-secret-input").focus();
+    });
+  }
+}
+
+function lockToAuthGate(errorMessage = "") {
+  if (state.pollTimer) {
+    window.clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+  state.authenticated = false;
+  if ($("btn-gate-submit")) {
+    $("btn-gate-submit").disabled = false;
+    $("btn-gate-submit").textContent = "🔓 UNLOCK COMMAND CENTER →";
+  }
+  if ($("gate-secret-input")) {
+    $("gate-secret-input").type = "password";
+  }
+  if ($("btn-gate-toggle-secret")) {
+    $("btn-gate-toggle-secret").textContent = "SHOW";
+  }
+  ["auth-modal", "tag-modal", "submit-modal", "lightbox-modal"].forEach((id) => {
+    const el = $(id);
+    if (el) el.classList.add("hidden");
+  });
+  updateConnectionBadge(false, "LOCKED");
+  setAuthScreenState("locked", errorMessage);
+}
+
 async function apiFetch(path, options = {}) {
   const {
     method = "GET",
@@ -473,17 +552,13 @@ async function apiFetch(path, options = {}) {
 
   const resp = await fetch(buildApiUrl(path), fetchOpts);
 
-  if (resp.status === 401) {
-    state.authenticated = false;
-    updateConnectionBadge(false, "UNAUTHORIZED");
-    if (!suppressAuthModal && !state.authPromptedOnce) {
-      state.authPromptedOnce = true;
-      openAuthModal();
-    }
-    throw new Error("Unauthorized — please authenticate in Security Access");
-  }
-
   if (responseType === "blob") {
+    if (resp.status === 401) {
+      if (!suppressAuthModal) {
+        lockToAuthGate("Session expired — please sign in again.");
+      }
+      throw new Error("Unauthorized — please authenticate to continue");
+    }
     if (!resp.ok) {
       let msg = `HTTP ${resp.status}`;
       try {
@@ -492,7 +567,7 @@ async function apiFetch(path, options = {}) {
       } catch {
         // Ignore non-JSON error
       }
-      throw new Error(msg);
+      throw new Error(formatAuthErrorMessage(msg));
     }
     return await resp.blob();
   }
@@ -515,12 +590,20 @@ async function apiFetch(path, options = {}) {
     parsed = { ok: resp.ok, raw: text };
   }
 
+  if (resp.status === 401) {
+    if (!suppressAuthModal) {
+      lockToAuthGate("Session expired or unauthorized — please sign in again.");
+    }
+    const rawUnauthorized = (parsed && (parsed.error || parsed.message)) || "UNAUTHORIZED";
+    throw new Error(formatAuthErrorMessage(rawUnauthorized));
+  }
+
   if (!resp.ok) {
     const errMsg =
       parsed && parsed.error && parsed.message && parsed.error !== parsed.message
         ? `${parsed.error}: ${parsed.message}`
         : (parsed && (parsed.error || parsed.message)) || `HTTP ${resp.status}`;
-    throw new Error(errMsg);
+    throw new Error(formatAuthErrorMessage(errMsg));
   }
   return parsed;
 }
@@ -536,9 +619,14 @@ function updateConnectionBadge(ok, modeText) {
 }
 
 function openAuthModal() {
+  if (!state.authenticated) {
+    lockToAuthGate();
+    return;
+  }
   $("auth-backend-url").value = state.backendUrl;
-  $("auth-secret-input").value = state.apiKey;
+  $("auth-secret-input").value = "";
   $("auth-use-header").checked = state.useApiHeader;
+  setBannerError($("modal-error-banner"), "");
   $("auth-modal").classList.remove("hidden");
 }
 
@@ -546,7 +634,70 @@ function closeAuthModal() {
   $("auth-modal").classList.add("hidden");
 }
 
-async function checkAuthAndBoot() {
+async function authenticateWithCredentials({
+  backendUrl,
+  secret,
+  useHeader,
+  errorEl,
+  submitBtn,
+  requireSecret = true,
+}) {
+  setBannerError(errorEl, "");
+  if (requireSecret && !secret) {
+    setBannerError(errorEl, "Please enter your WEB_ADMIN_PASSWORD or WEB_API_KEY.");
+    return false;
+  }
+
+  const prevLabel = submitBtn ? submitBtn.textContent : "";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "VERIFYING...";
+  }
+
+  state.backendUrl = backendUrl;
+  state.useApiHeader = useHeader;
+  localStorage.setItem(STORAGE_BACKEND_URL, backendUrl);
+  localStorage.setItem(STORAGE_USE_HEADER, useHeader ? "true" : "false");
+
+  try {
+    if (secret) {
+      const loginRes = await apiFetch("/api/auth/login", {
+        method: "POST",
+        body: { password: secret },
+        suppressAuthModal: true,
+      });
+      state.apiKey = useHeader ? secret : "";
+      localStorage.setItem(STORAGE_API_KEY, state.apiKey);
+      if (loginRes.token) {
+        state.bearerToken = loginRes.token;
+        localStorage.setItem(STORAGE_BEARER, loginRes.token);
+      }
+    }
+
+    const ok = await checkAuthAndBoot({ showChecking: false });
+    if (!ok) {
+      setBannerError(errorEl, "Verification succeeded, but session check remained unauthenticated.");
+      return false;
+    }
+    if ($("gate-secret-input")) $("gate-secret-input").value = "";
+    if ($("auth-secret-input")) $("auth-secret-input").value = "";
+    return true;
+  } catch (err) {
+    const msg = err && err.message ? err.message : "Authentication failed.";
+    setBannerError(errorEl, msg);
+    return false;
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = prevLabel;
+    }
+  }
+}
+
+async function checkAuthAndBoot({ showChecking = true } = {}) {
+  if (showChecking && !state.authenticated) {
+    setAuthScreenState("checking");
+  }
   try {
     let authRes;
     try {
@@ -563,10 +714,10 @@ async function checkAuthAndBoot() {
     state.authenticated = Boolean(authRes.authenticated);
     state.authMode = authRes.mode || "session";
     if (!state.authenticated) {
-      updateConnectionBadge(false, authRes.auth_required ? "AUTH REQUIRED" : "DISCONNECTED");
-      openAuthModal();
+      lockToAuthGate("");
       return false;
     }
+    setAuthScreenState("unlocked");
     updateConnectionBadge(true, state.authMode);
     applyViewDom();
     await refreshTelemetryAndActiveView();
@@ -574,13 +725,7 @@ async function checkAuthAndBoot() {
     return true;
   } catch (err) {
     const msg = String(err && err.message ? err.message : "");
-    if (msg.toLowerCase().includes("unauthorized") || msg.includes("401")) {
-      updateConnectionBadge(false, "AUTH REQUIRED");
-      openAuthModal();
-    } else {
-      updateConnectionBadge(false, "UNREACHABLE");
-      toast(`Backend connection failed: ${msg || "Network error"}`, "error");
-    }
+    lockToAuthGate(`Backend unreachable: ${msg || "Network error"}`);
     return false;
   }
 }
@@ -3210,8 +3355,60 @@ function bindEvents() {
   $("btn-cfg-resume").addEventListener("click", () => setAutomationPause(null));
   $("btn-cfg-reset").addEventListener("click", executeDbReset);
 
-  // Modals
+  // Full-Screen Security Gate events
+  $("gate-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const ok = await authenticateWithCredentials({
+      backendUrl: $("gate-backend-url").value.trim().replace(/\/+$/, ""),
+      secret: $("gate-secret-input").value.trim(),
+      useHeader: $("gate-use-header").checked,
+      errorEl: $("gate-error-banner"),
+      submitBtn: $("btn-gate-submit"),
+      requireSecret: true,
+    });
+    if (ok) {
+      toast("Command Center unlocked!");
+    }
+  });
+
+  $("btn-gate-toggle-secret").addEventListener("click", () => {
+    const input = $("gate-secret-input");
+    const btn = $("btn-gate-toggle-secret");
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    btn.textContent = reveal ? "HIDE" : "SHOW";
+  });
+
+  $("btn-gate-recheck").addEventListener("click", () => {
+    state.backendUrl = $("gate-backend-url").value.trim().replace(/\/+$/, "");
+    state.useApiHeader = $("gate-use-header").checked;
+    localStorage.setItem(STORAGE_BACKEND_URL, state.backendUrl);
+    localStorage.setItem(STORAGE_USE_HEADER, state.useApiHeader ? "true" : "false");
+    checkAuthAndBoot();
+  });
+
+  $("btn-gate-reset-endpoint").addEventListener("click", () => {
+    state.backendUrl = "";
+    state.useApiHeader = false;
+    localStorage.removeItem(STORAGE_BACKEND_URL);
+    localStorage.setItem(STORAGE_USE_HEADER, "false");
+    $("gate-backend-url").value = "";
+    $("gate-use-header").checked = false;
+    checkAuthAndBoot();
+  });
+
+  // Modals (authenticated workspace only)
   $("btn-close-auth").addEventListener("click", closeAuthModal);
+  document.addEventListener("keydown", (ev) => {
+    if (
+      ev.key === "Escape" &&
+      state.authenticated &&
+      $("auth-modal") &&
+      !$("auth-modal").classList.contains("hidden")
+    ) {
+      closeAuthModal();
+    }
+  });
   $("btn-close-submit").addEventListener("click", () => $("submit-modal").classList.add("hidden"));
   $("btn-cancel-submit").addEventListener("click", () => $("submit-modal").classList.add("hidden"));
   $("btn-confirm-submit").addEventListener("click", confirmExecuteSubmit);
@@ -3219,36 +3416,17 @@ function bindEvents() {
 
   $("auth-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const rawUrl = $("auth-backend-url").value.trim().replace(/\/+$/, "");
-    const secret = $("auth-secret-input").value.trim();
-    const useHdr = $("auth-use-header").checked;
-
-    state.backendUrl = rawUrl;
-    state.apiKey = secret;
-    state.useApiHeader = useHdr;
-    localStorage.setItem(STORAGE_BACKEND_URL, rawUrl);
-    localStorage.setItem(STORAGE_API_KEY, useHdr ? secret : "");
-    localStorage.setItem(STORAGE_USE_HEADER, useHdr ? "true" : "false");
-
-    try {
-      if (secret) {
-        const loginRes = await apiFetch("/api/auth/login", {
-          method: "POST",
-          body: { password: secret },
-          suppressAuthModal: true,
-        });
-        if (loginRes.token) {
-          state.bearerToken = loginRes.token;
-          localStorage.setItem(STORAGE_BEARER, loginRes.token);
-        }
-      }
-      const ok = await checkAuthAndBoot();
-      if (ok) {
-        closeAuthModal();
-        toast("Authenticated and synced with Relentless backend!");
-      }
-    } catch (err) {
-      toast(`Authentication failed: ${err.message}`, "error");
+    const ok = await authenticateWithCredentials({
+      backendUrl: $("auth-backend-url").value.trim().replace(/\/+$/, ""),
+      secret: $("auth-secret-input").value.trim(),
+      useHeader: $("auth-use-header").checked,
+      errorEl: $("modal-error-banner"),
+      submitBtn: $("btn-auth-submit"),
+      requireSecret: false,
+    });
+    if (ok) {
+      closeAuthModal();
+      toast("Session & backend endpoint verified!");
     }
   });
 
@@ -3260,11 +3438,15 @@ function bindEvents() {
     }
     state.bearerToken = "";
     state.apiKey = "";
-    state.authenticated = false;
+    state.systemStatus = null;
+    state.pipelineData = { items: [], total: 0 };
+    state.studioJob = null;
+    state.okfData = { concepts: [], summary: {} };
     localStorage.removeItem(STORAGE_BEARER);
     localStorage.removeItem(STORAGE_API_KEY);
-    updateConnectionBadge(false, "LOGGED OUT");
-    toast("Session cleared.");
+    if ($("gate-secret-input")) $("gate-secret-input").value = "";
+    if ($("auth-secret-input")) $("auth-secret-input").value = "";
+    lockToAuthGate("Signed out. Enter your password or WEB_API_KEY to unlock.");
   });
 }
 
