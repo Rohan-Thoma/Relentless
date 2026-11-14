@@ -1054,7 +1054,7 @@ async def async_get_user_settings() -> dict[str, Any]:
 def save_master_profile(profile_dict: dict[str, Any]) -> dict[str, Any]:
     """Persists master_profile into Neon app_settings (and local JSON if present) and clears cache."""
     if not isinstance(profile_dict, dict):
-        raise ValueError("master_profile must be a JSON object")
+        raise TypeError("master_profile must be a JSON object")
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -1084,7 +1084,7 @@ async def async_save_master_profile(profile_dict: dict[str, Any]) -> dict[str, A
 def save_config_yaml(config_dict: dict[str, Any]) -> dict[str, Any]:
     """Validates AppConfig, persists config_yaml into Neon app_settings (and local YAML if present), and clears cache."""
     if not isinstance(config_dict, dict):
-        raise ValueError("config must be a mapping/object")
+        raise TypeError("config must be a mapping/object")
 
     validated = AppConfig(**config_dict).model_dump()
 
