@@ -38,11 +38,37 @@ export default async (req: Request, context: Context): Promise<Response> => {
     );
   }
 
-  const rawBackend = (Netlify.env.get("RELENTLESS_BACKEND_URL") || DEFAULT_BACKEND_URL)
+  const envBackend = (Netlify.env.get("RELENTLESS_BACKEND_URL") || "")
     .trim()
-    .replace(/\/+$/, "");
+    .replace(/^['"]+|['"]+$/g, "")
+    .trim();
+  let rawBackend = (envBackend || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(rawBackend)) {
+    const scheme = /^(localhost|127\.0\.0\.1)(:|\/|$)/i.test(rawBackend) ? "http://" : "https://";
+    rawBackend = `${scheme}${rawBackend}`;
+  }
 
-  const targetUrl = `${rawBackend}${url.pathname}${url.search}`;
+  let backendOrigin: string;
+  try {
+    backendOrigin = new URL(rawBackend).origin;
+  } catch {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "INVALID_BACKEND_URL",
+        message: `RELENTLESS_BACKEND_URL is not a valid URL: '${envBackend || rawBackend}'`,
+      }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      },
+    );
+  }
+
+  const targetUrl = `${backendOrigin}${url.pathname}${url.search}`;
   const proxyHeaders = new Headers(req.headers);
   proxyHeaders.delete("host");
   proxyHeaders.delete("connection");

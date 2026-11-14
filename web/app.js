@@ -497,7 +497,17 @@ async function apiFetch(path, options = {}) {
     return await resp.blob();
   }
 
+  const contentType = (resp.headers.get("content-type") || "").toLowerCase();
   const text = await resp.text();
+  if (
+    contentType.includes("text/html") ||
+    /^\s*<!doctype\s+html/i.test(text) ||
+    /^\s*<html[\s>]/i.test(text)
+  ) {
+    throw new Error(
+      "Edge proxy returned HTML instead of JSON (check Netlify edge function /api/* routing)",
+    );
+  }
   let parsed = null;
   try {
     parsed = text ? JSON.parse(text) : {};
@@ -506,7 +516,10 @@ async function apiFetch(path, options = {}) {
   }
 
   if (!resp.ok) {
-    const errMsg = (parsed && (parsed.error || parsed.message)) || `HTTP ${resp.status}`;
+    const errMsg =
+      parsed && parsed.error && parsed.message && parsed.error !== parsed.message
+        ? `${parsed.error}: ${parsed.message}`
+        : (parsed && (parsed.error || parsed.message)) || `HTTP ${resp.status}`;
     throw new Error(errMsg);
   }
   return parsed;
