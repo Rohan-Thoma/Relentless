@@ -535,7 +535,18 @@ function closeAuthModal() {
 
 async function checkAuthAndBoot() {
   try {
-    const authRes = await apiFetch("/api/auth/status", { suppressAuthModal: true });
+    let authRes;
+    try {
+      authRes = await apiFetch("/api/auth/status", { suppressAuthModal: true });
+    } catch (firstErr) {
+      if (state.backendUrl) {
+        state.backendUrl = "";
+        localStorage.removeItem(STORAGE_BACKEND_URL);
+        authRes = await apiFetch("/api/auth/status", { suppressAuthModal: true });
+      } else {
+        throw firstErr;
+      }
+    }
     state.authenticated = Boolean(authRes.authenticated);
     state.authMode = authRes.mode || "session";
     if (!state.authenticated) {
@@ -549,8 +560,14 @@ async function checkAuthAndBoot() {
     scheduleNextPoll();
     return true;
   } catch (err) {
-    updateConnectionBadge(false, "UNREACHABLE");
-    toast(`Backend connection failed: ${err.message}`, "error");
+    const msg = String(err && err.message ? err.message : "");
+    if (msg.toLowerCase().includes("unauthorized") || msg.includes("401")) {
+      updateConnectionBadge(false, "AUTH REQUIRED");
+      openAuthModal();
+    } else {
+      updateConnectionBadge(false, "UNREACHABLE");
+      toast(`Backend connection failed: ${msg || "Network error"}`, "error");
+    }
     return false;
   }
 }

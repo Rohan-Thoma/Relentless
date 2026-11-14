@@ -1,23 +1,25 @@
 import type { Config, Context } from "@netlify/edge-functions";
 
+const DEFAULT_BACKEND_URL = "https://relentless-production-f89e0e77.up.railway.app";
+
 /**
  * Relentless API Proxy Edge Function
  *
- * Defense-in-depth proxy between the Netlify-hosted Obsidian Cyber-HUD UI
+ * Defense-in-depth proxy between the Netlify-hosted Obsidian Command Center UI
  * and the Python backend (Railway or self-hosted tunnel).
  *
- * Required Netlify Environment Variables:
- * - RELENTLESS_BACKEND_URL: Base URL of the Python Web API (e.g. https://relentless.up.railway.app)
+ * Environment Variables (set in Netlify with Functions/Runtime scope):
+ * - RELENTLESS_BACKEND_URL: Base URL of the Python Web API (defaults to live Railway backend)
  * - WEB_API_KEY: Shared secret matching WEB_API_KEY / WEB_ADMIN_PASSWORD on the Python backend
  *
  * Optional:
- * - REQUIRE_NETLIFY_USER: Set to "false" only if running a public site without Netlify Private Project auth
+ * - REQUIRE_NETLIFY_USER: Set to "true" to enforce strict context.user check inside the edge proxy
  */
 export default async (req: Request, context: Context): Promise<Response> => {
   const url = new URL(req.url);
   const isLocalDev =
     url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-  const requireNetlifyUser = Netlify.env.get("REQUIRE_NETLIFY_USER") !== "false";
+  const requireNetlifyUser = Netlify.env.get("REQUIRE_NETLIFY_USER") === "true";
 
   if (requireNetlifyUser && !isLocalDev && !context.user) {
     return new Response(
@@ -36,23 +38,9 @@ export default async (req: Request, context: Context): Promise<Response> => {
     );
   }
 
-  const rawBackend = (Netlify.env.get("RELENTLESS_BACKEND_URL") || "").trim().replace(/\/+$/, "");
-  if (!rawBackend) {
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: "BACKEND_URL_NOT_CONFIGURED",
-        message: "RELENTLESS_BACKEND_URL is not configured in Netlify environment variables.",
-      }),
-      {
-        status: 503,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-        },
-      },
-    );
-  }
+  const rawBackend = (Netlify.env.get("RELENTLESS_BACKEND_URL") || DEFAULT_BACKEND_URL)
+    .trim()
+    .replace(/\/+$/, "");
 
   const targetUrl = `${rawBackend}${url.pathname}${url.search}`;
   const proxyHeaders = new Headers(req.headers);
@@ -60,7 +48,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
   proxyHeaders.delete("connection");
 
   const webApiKey = (Netlify.env.get("WEB_API_KEY") || "").trim();
-  if (webApiKey) {
+  if (webApiKey && !proxyHeaders.has("x-relentless-api-key")) {
     proxyHeaders.set("X-Relentless-Api-Key", webApiKey);
   }
 
