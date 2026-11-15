@@ -1184,6 +1184,7 @@ body {
 }
 
 .studio-grid {
+  padding-top: 20px;
   display: grid;
   grid-template-columns: 1fr 1.12fr;
   gap: 20px;
