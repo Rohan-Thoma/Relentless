@@ -1,7 +1,5 @@
 import type { Config, Context } from "@netlify/edge-functions";
 
-const DEFAULT_BACKEND_URL = "https://relentless-production-f89e0e77.up.railway.app";
-
 /**
  * Relentless API Proxy Edge Function
  *
@@ -42,7 +40,24 @@ export default async (req: Request, context: Context): Promise<Response> => {
     .trim()
     .replace(/^['"]+|['"]+$/g, "")
     .trim();
-  let rawBackend = (envBackend || DEFAULT_BACKEND_URL).replace(/\/+$/, "");
+  if (!envBackend) {
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: "RELENTLESS_BACKEND_URL_MISSING",
+        message:
+          "RELENTLESS_BACKEND_URL is not configured in Netlify Environment Variables. Set it to your backend URL (e.g. https://your-app.up.railway.app).",
+      }),
+      {
+        status: 500,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      },
+    );
+  }
+  let rawBackend = envBackend.replace(/\/+$/, "");
   if (!/^https?:\/\//i.test(rawBackend)) {
     const scheme = /^(localhost|127\.0\.0\.1)(:|\/|$)/i.test(rawBackend) ? "http://" : "https://";
     rawBackend = `${scheme}${rawBackend}`;

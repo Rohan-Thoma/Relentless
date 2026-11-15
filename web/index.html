@@ -221,8 +221,13 @@
           <span class="nav-code">06</span>
           <span class="nav-text">CONFIG &amp; VAULT</span>
         </a>
-        <a class="nav-item" href="/?view=info" data-view="info">
+        <a class="nav-item" href="/?view=logs" data-view="logs">
           <span class="nav-code">07</span>
+          <span class="nav-text">LOGS &amp; DIAG</span>
+          <span class="nav-badge" id="nav-badge-logs">0</span>
+        </a>
+        <a class="nav-item" href="/?view=info" data-view="info">
+          <span class="nav-code">08</span>
           <span class="nav-text">SYSTEM GUIDE</span>
         </a>
 
@@ -258,6 +263,22 @@
             </div>
             <div class="view-actions">
               <a class="btn btn-lime" href="/?view=pipeline" data-view="pipeline">OPEN FULL PIPELINE →</a>
+            </div>
+          </div>
+
+          <!-- First-Time Onboarding / Readiness Alert Banner -->
+          <div class="hud-card onboarding-banner hidden" id="onboarding-banner">
+            <div class="card-header">
+              <span class="card-title text-amber" id="onboarding-title">⚠ FIRST-TIME SETUP REQUIRED</span>
+              <span class="mono-tag" id="onboarding-tag">ACTION NEEDED</span>
+            </div>
+            <div class="card-body">
+              <p class="muted-copy" id="onboarding-summary"></p>
+              <ul class="onboarding-list" id="onboarding-list"></ul>
+              <div class="onboarding-actions">
+                <a class="btn btn-lime" href="/?view=config" data-view="config">⚙️ OPEN 06 // CONFIG &amp; VAULT</a>
+                <a class="btn btn-outline" href="/?view=logs" data-view="logs">🩺 VIEW 07 // LOGS &amp; DIAG</a>
+              </div>
             </div>
           </div>
 
@@ -663,10 +684,23 @@
 
           <!-- Config Page 1: Candidate Profile & Resume Filler Form -->
           <div class="subpage active" id="cfg-sub-profile">
+            <div class="hud-card onboarding-banner hidden" id="cfg-onboarding-hint">
+              <div class="card-header">
+                <span class="card-title text-amber">NO CANDIDATE PROFILE CONFIGURED YET</span>
+                <span class="mono-tag">FIRST-RUN ONBOARDING</span>
+              </div>
+              <div class="card-body">
+                <p class="muted-copy" id="cfg-onboarding-text">Fill your real contact details, core skills, and at least one experience role below — or click <strong>Load Starter Template</strong> to inspect the exact structure before editing &amp; saving to PostgreSQL.</p>
+              </div>
+            </div>
+
             <form id="cfg-profile-form" class="hud-card">
               <div class="card-header">
                 <span class="card-title">CANDIDATE MASTER PROFILE &amp; RESUME FILLER</span>
-                <button type="submit" class="btn btn-lime" id="btn-save-profile-form">💾 SAVE CANDIDATE PROFILE</button>
+                <div class="card-header-actions">
+                  <button type="button" class="btn btn-outline" id="btn-pf-load-template">📋 LOAD STARTER TEMPLATE</button>
+                  <button type="submit" class="btn btn-lime" id="btn-save-profile-form">💾 SAVE CANDIDATE PROFILE</button>
+                </div>
               </div>
               <div class="card-body hud-form">
                 <div class="form-section-title"><span>1. IDENTITY &amp; CONTACT LINKS</span></div>
@@ -687,7 +721,7 @@
                 <div class="form-grid-3">
                   <label class="field">
                     <span>LOCATION DISPLAY</span>
-                    <input type="text" id="pf-location" class="hud-input" placeholder="Hyderabad, India (Open to Remote)" />
+                    <input type="text" id="pf-location" class="hud-input" placeholder="City, Country (Open to Remote)" />
                   </label>
                   <label class="field">
                     <span>LINKEDIN URL</span>
@@ -899,6 +933,7 @@
                   </div>
                   <label class="field"><span>RESULTS WANTED / QUERY</span><input type="number" id="ec-jb-wanted" class="hud-input" min="1" /></label>
                   <label class="field"><span>MAX BOARD AGE (HOURS)</span><input type="number" id="ec-jb-hours-old" class="hud-input" min="1" /></label>
+                  <label class="field"><span>INDEED COUNTRY</span><input type="text" id="ec-jb-country-indeed" class="hud-input" placeholder="india / usa / uk / canada" /></label>
                   <label class="field"><span>GMAIL LABEL</span><input type="text" id="ec-gm-label" class="hud-input" /></label>
                   <label class="field"><span>GMAIL LOOKBACK (DAYS)</span><input type="number" id="ec-gm-lookback" class="hud-input" min="1" /></label>
                   <label class="field"><span>GMAIL MAX AGE (HOURS)</span><input type="number" id="ec-gm-max-age" class="hud-input" min="1" /></label>
@@ -1025,11 +1060,61 @@
           </div>
         </section>
 
-        <!-- VIEW 7: SYSTEM GUIDE & INFO PAGE -->
+        <!-- VIEW 7: LIVE LOGS & SYSTEM DIAGNOSTICS -->
+        <section class="view-panel" id="view-logs">
+          <div class="view-header">
+            <div>
+              <h1>07 // LIVE LOGS &amp; DIAGNOSTICS</h1>
+              <p class="view-sub">Bounded server log buffer with automatic secret redaction, live readiness checks, and one-click export.</p>
+            </div>
+            <div class="view-actions">
+              <button class="btn btn-purple" id="btn-logs-live" title="Toggle automatic polling every cycle">● LIVE STREAM: ON</button>
+              <button class="btn btn-outline" id="btn-logs-refresh">↻ REFRESH</button>
+              <button class="btn btn-outline" id="btn-logs-download">↓ EXPORT .TXT</button>
+              <button class="btn btn-warn" id="btn-logs-clear">🗑 CLEAR BUFFER</button>
+            </div>
+          </div>
+
+          <div class="hud-card logs-readiness-card">
+            <div class="card-header">
+              <span class="card-title">SYSTEM READINESS &amp; ENV CHECKLIST</span>
+              <span class="mono-tag" id="logs-readiness-badge">CHECKING...</span>
+            </div>
+            <div class="card-body">
+              <div class="readiness-grid" id="logs-readiness-grid"></div>
+            </div>
+          </div>
+
+          <div class="hud-card logs-buffer-card">
+            <div class="card-header">
+              <span class="card-title">SERVER LOG STREAM</span>
+              <span class="mono-tag" id="logs-counts-tag">0 BUFFERED</span>
+            </div>
+            <div class="card-body">
+              <div class="logs-toolbar">
+                <div class="segmented-control" id="logs-level-pills">
+                  <button type="button" class="seg-btn log-level-btn active" data-log-level="ALL">ALL</button>
+                  <button type="button" class="seg-btn log-level-btn" data-log-level="ERROR">ERROR</button>
+                  <button type="button" class="seg-btn log-level-btn" data-log-level="WARNING">WARN</button>
+                  <button type="button" class="seg-btn log-level-btn" data-log-level="INFO">INFO</button>
+                </div>
+                <input
+                  type="search"
+                  id="logs-search"
+                  class="hud-input logs-search-input"
+                  placeholder="Filter logs by logger, keyword, company, or error..."
+                />
+              </div>
+              <div class="logs-terminal mono" id="logs-terminal" role="log" aria-live="polite"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 8: SYSTEM GUIDE & INFO PAGE -->
         <section class="view-panel" id="view-info">
           <div class="view-header">
             <div>
-              <h1>07 // SYSTEM GUIDE &amp; ARCHITECTURE</h1>
+              <h1>08 // SYSTEM GUIDE &amp; ARCHITECTURE</h1>
               <p class="view-sub">Documentation, multi-tab workflow tips, security design, and CLI reference for Relentless.</p>
             </div>
           </div>
@@ -1086,8 +1171,8 @@
               </div>
               <div class="card-body">
                 <ul class="guide-list">
-                  <li><strong>Two-Layer Zero-CVE Design:</strong> Vanilla HTML/CSS/ES6 frontend (zero npm dependencies) hosted on a <strong>Netlify Private Project</strong> + Deno Edge Proxy (<code>api_proxy.ts</code>) injecting <code>X-Relentless-Api-Key</code> server-side.</li>
-                  <li><strong>Backend Protections:</strong> Constant-time key verification, HMAC-SHA256 <code>HttpOnly</code> session cookies, 5-attempt / 15-min IP brute-force lockout with Telegram alerts, and explicit DB reset confirmation.</li>
+                  <li><strong>Flexible Deployment:</strong> Run directly on <strong>Railway Direct</strong> with full-screen <code>WEB_API_KEY</code> cookie login (zero proxy compute credits), or place a private static UI + Deno Edge Proxy in front.</li>
+                  <li><strong>Backend Protections:</strong> Constant-time key verification, HMAC-SHA256 <code>HttpOnly</code> session cookies, 5-attempt / 15-min IP brute-force lockout, secret-redacted <code>07 // LOGS &amp; DIAG</code> + Telegram <code>/logs</code>, and explicit DB reset confirmation.</li>
                   <li><strong>CLI Commands:</strong> Run <code>python manage.py web</code> for Web UI only, <code>python manage.py run</code> for full background pipeline + Telegram + Web, <code>python manage.py doctor</code> for diagnostics, and <code>python manage.py sync</code> to push local JSON/YAML to Neon.</li>
                 </ul>
               </div>

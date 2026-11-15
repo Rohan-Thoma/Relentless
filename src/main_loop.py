@@ -11,13 +11,34 @@ from src.ingestors.gmail_ingestor import poll_gmail_alerts
 from src.ingestors.jobboards_poller import poll_jobboards
 from src.knowledge.distiller import run_distill
 from src.knowledge.store import hydrate
+from src.logging_config import configure_logging
 from src.notify import alert
 from src.pipeline import PipelineEngine, TASK_REGISTRY
+from src.readiness import collect_readiness, log_startup_readiness
 from src.triage.jev_judge import run_triage
 
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_HOURS = float(os.getenv("POLL_INTERVAL_HOURS", "1.0"))
+
+
+async def _wait_until_profile_configured(worker_name: str) -> None:
+    """Pauses background workers cleanly until Master Profile is configured via Web or CLI."""
+    logged = False
+    while True:
+        try:
+            rep = await asyncio.to_thread(collect_readiness, False)
+            if rep.get("profile_configured"):
+                return
+        except Exception as e:
+            logger.warning("[%s] Readiness check error: %s", worker_name, e)
+        if not logged:
+            logger.warning(
+                "[%s] On standby — Master Profile is not configured yet. Set it in Web UI -> 06 // CONFIG & VAULT or run 'python manage.py setup'.",
+                worker_name,
+            )
+            logged = True
+        await asyncio.sleep(30.0)
 
 
 async def _process_digest_and_triage(context_label: str):
@@ -107,6 +128,7 @@ async def scheduled_pipeline_worker(
 async def _gmail_producer_loop(scanner_cfg):
     interval_sec = float(getattr(scanner_cfg, "poll_interval_minutes", 20)) * 60.0
     while True:
+        await _wait_until_profile_configured("Gmail Scanner")
         try:
             TASK_REGISTRY.set_system_task("Gmail Scanner")
             await poll_gmail_alerts()
@@ -122,6 +144,7 @@ async def _gmail_producer_loop(scanner_cfg):
 async def _jobboards_producer_loop(poll_interval_hours: float):
     interval_sec = max(60.0, poll_interval_hours * 3600.0)
     while True:
+        await _wait_until_profile_configured("JobSpy Boards")
         try:
             TASK_REGISTRY.set_system_task("JobSpy Boards")
             await poll_jobboards()
@@ -137,6 +160,7 @@ async def _jobboards_producer_loop(poll_interval_hours: float):
 async def _ats_producer_loop():
     interval_sec = 4.0 * 3600.0
     while True:
+        await _wait_until_profile_configured("ATS Crawler")
         try:
             TASK_REGISTRY.set_system_task("ATS Crawler")
             await poll_all_ats()
@@ -152,6 +176,7 @@ async def _ats_producer_loop():
 async def _distill_loop():
     interval_sec = 1800.0
     while True:
+        await _wait_until_profile_configured("OKF Distiller")
         try:
             await asyncio.to_thread(run_distill)
         except asyncio.CancelledError:
@@ -168,14 +193,26 @@ async def main(
     sources: list[str] | None = None,
     once: bool = False,
 ):
+    configure_logging(capture_stdio=True)
     init_db()
     hydrate()
     try:
         from src.ingestors.dedup_cache import CACHE
 
         CACHE.hydrate_from_db()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Dedup cache hydration skipped: %s", e)
+
+    report = log_startup_readiness()
+    if not report.get("ready"):
+        missing = ", ".join(report.get("missing_required") or [])
+        logger.error("Relentless startup detected incomplete configuration: %s", missing)
+        alert(
+            f"🚨 Relentless started with missing setup ({missing}). "
+            "Open the Web UI (06 // CONFIG & VAULT or 07 // LOGS & DIAG) or run /logs in Telegram."
+        )
+        if once:
+            raise RuntimeError(f"Cannot execute pipeline (--once): missing required setup: {missing}")
 
     if once:
         await scheduled_pipeline_worker(
@@ -199,12 +236,17 @@ async def main(
             enable_ats = False
 
         coros = [
-            listen_for_button_clicks(),
             engine.run(),
             _gmail_producer_loop(scanner_cfg),
             _jobboards_producer_loop(POLL_INTERVAL_HOURS),
             _distill_loop(),
         ]
+        if os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip():
+            coros.insert(0, listen_for_button_clicks())
+        else:
+            logger.warning(
+                "Telegram bot listener disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable Telegram alerts & /logs."
+            )
         if enable_ats and not ats_only:
             coros.append(_ats_producer_loop())
 
@@ -213,7 +255,12 @@ async def main(
 
             coros.append(run_web_server())
 
-        print("🚀 Starting Relentless Unified Pipeline (Telegram Bot + Web API + Concurrent Streaming Producers)...", flush=True)
+        logger.info(
+            "Starting Relentless Unified Pipeline (Web API + Concurrent Streaming Producers%s)...",
+            " + Telegram Bot"
+            if (os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip())
+            else "",
+        )
         await asyncio.gather(*coros)
 
 

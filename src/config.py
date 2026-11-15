@@ -48,6 +48,7 @@ class JobboardsConfig(BaseModel):
     locations: list[str] = Field(default_factory=list)
     results_wanted: int = 20
     hours_old: int = 72
+    country_indeed: str = "india"
 
 
 class GmailScannerConfig(BaseModel):

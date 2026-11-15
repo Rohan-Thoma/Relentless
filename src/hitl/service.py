@@ -176,6 +176,10 @@ def get_system_status() -> dict[str, Any]:
             is_paused, paused_until = _parse_pause_state(pause_row.get("value"))
 
     reg = TASK_REGISTRY.get_all_status()
+    from src.readiness import collect_readiness
+
+    readiness = collect_readiness(check_db=False)
+    readiness["db_ok"] = True
     return {
         "total_jobs": total,
         "triage_passed": passed,
@@ -187,6 +191,7 @@ def get_system_status() -> dict[str, Any]:
         "system_tasks": list(reg.get("system_tasks", [])),
         "is_paused": is_paused,
         "paused_until": paused_until,
+        "readiness": readiness,
     }
 
 
@@ -1002,11 +1007,15 @@ async def async_get_evaluation_data() -> dict[str, Any]:
 # 6. User Profile, Configuration & Automation Controls
 # ==============================================================================
 def get_user_settings() -> dict[str, Any]:
-    """Reads master_profile, config_yaml, effective config, and pause state."""
+    """Reads master_profile, config_yaml, effective config, pause state, and readiness."""
+    from src.readiness import collect_readiness
+
+    profile_error: str | None = None
     try:
         profile = load_master_profile()
-    except Exception:
+    except Exception as e:
         profile = {}
+        profile_error = str(e)
 
     raw_config: dict[str, Any] = {}
     is_paused = False
@@ -1038,12 +1047,16 @@ def get_user_settings() -> dict[str, Any]:
     except Exception:
         effective_cfg = raw_config
 
+    readiness = collect_readiness(check_db=False)
     return {
         "master_profile": profile,
+        "profile_configured": readiness["profile_configured"],
+        "profile_error": profile_error or readiness.get("profile_error"),
         "config": raw_config or effective_cfg,
         "effective_config": effective_cfg,
         "is_paused": is_paused,
         "paused_until": paused_until,
+        "readiness": readiness,
     }
 
 

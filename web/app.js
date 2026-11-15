@@ -7,7 +7,7 @@ const STORAGE_API_KEY = "relentless_api_key";
 const STORAGE_BEARER = "relentless_bearer_token";
 const STORAGE_USE_HEADER = "relentless_use_api_header";
 
-const VALID_VIEWS = new Set(["dashboard", "pipeline", "studio", "okf", "eval", "config", "info"]);
+const VALID_VIEWS = new Set(["dashboard", "pipeline", "studio", "okf", "eval", "config", "logs", "info"]);
 
 const state = {
   view: "dashboard",
@@ -58,6 +58,13 @@ const state = {
 
   // Eval & Config state
   evalData: null,
+  settingsData: null,
+  logsState: {
+    level: "ALL",
+    query: "",
+    live: true,
+    data: null,
+  },
   settingsData: null,
   profileFormLoadedOnce: false,
   engineFormLoadedOnce: false,
@@ -806,6 +813,8 @@ function switchView(viewName, { pushHistory = true } = {}) {
     loadEvalData();
   } else if (viewName === "config") {
     loadConfigVault();
+  } else if (viewName === "logs") {
+    loadLogsView();
   }
 }
 
@@ -842,6 +851,8 @@ async function pollTick() {
       await loadPipelineJobs({ silent: true });
     } else if (state.view === "dashboard") {
       await loadDashboardPriorityJobs({ silent: true });
+    } else if (state.view === "logs" && state.logsState.live) {
+      await loadLogsView({ silent: true });
     }
   } catch {
     // Handled inside apiFetch
@@ -858,6 +869,7 @@ async function refreshTelemetryAndActiveView() {
   else if (state.view === "okf") await loadOkfBrain();
   else if (state.view === "eval") await loadEvalData();
   else if (state.view === "config") await loadConfigVault();
+  else if (state.view === "logs") await loadLogsView();
 }
 
 // ==============================================================================
@@ -906,9 +918,62 @@ async function fetchSystemStatus() {
   const unreviewedCount = Math.max(0, (status.triage_passed || 0) - (status.human_labeled || 0));
   $("nav-badge-inbox").textContent = String(unreviewedCount);
   $("nav-badge-total").textContent = String(status.total_jobs || 0);
+  renderOnboardingAlerts(status);
 
   if (state.view === "dashboard") {
     renderDashboardTelemetry(status);
+  }
+}
+
+function renderOnboardingAlerts(status) {
+  const readiness = status && status.readiness;
+  const banner = $("onboarding-banner");
+  const cfgHint = $("cfg-onboarding-hint");
+  const logsBadge = $("nav-badge-logs");
+  if (!readiness) return;
+
+  const missingReq = readiness.missing_required || [];
+  const warnings = readiness.warnings || [];
+  const checks = readiness.checks || [];
+  const errorChecks = checks.filter((c) => c.status === "error");
+  const warnChecks = checks.filter((c) => c.status === "warning");
+
+  if (logsBadge) {
+    const issueCount = errorChecks.length + warnChecks.length;
+    logsBadge.textContent = issueCount > 0 ? `${errorChecks.length || warnChecks.length}!` : "OK";
+    logsBadge.classList.toggle("badge-error", errorChecks.length > 0);
+  }
+
+  if (banner) {
+    if (!readiness.ready || readiness.is_template_profile) {
+      banner.classList.remove("hidden");
+      $("onboarding-title").textContent = !readiness.ready
+        ? "⚠ FIRST-TIME SETUP REQUIRED — SOME FEATURES ARE BLOCKED"
+        : "⚠ STARTER TEMPLATE ACTIVE — CUSTOMIZE YOUR REAL PROFILE";
+      $("onboarding-tag").textContent = missingReq.length
+        ? `${missingReq.length} REQUIRED`
+        : `${warnings.length} WARNING(S)`;
+      $("onboarding-summary").textContent = !readiness.profile_configured
+        ? "No personalized Candidate Master Profile was found yet. Background AI triage and tailoring are paused cleanly until you save your details in 06 // CONFIG & VAULT."
+        : "Review the unresolved configuration items below to unlock every pipeline module:";
+
+      const items = [...errorChecks, ...warnChecks]
+        .map(
+          (chk) =>
+            `<li><strong>${esc(chk.label)}:</strong> ${esc(chk.detail)}${
+              chk.fix ? ` <em>(${esc(chk.fix)})</em>` : ""
+            }</li>`
+        )
+        .join("");
+      $("onboarding-list").innerHTML = items;
+    } else {
+      banner.classList.add("hidden");
+    }
+  }
+
+  if (cfgHint) {
+    const showCfgHint = !readiness.profile_configured || readiness.is_template_profile;
+    cfgHint.classList.toggle("hidden", !showCfgHint);
   }
 }
 
@@ -2815,6 +2880,9 @@ function renderEngineConfigForm(cfg) {
   setTagBox("ec-jb-locations-box", jb.locations || []);
   $("ec-jb-wanted").value = jb.results_wanted ?? 20;
   $("ec-jb-hours-old").value = jb.hours_old ?? 72;
+  if ($("ec-jb-country-indeed")) {
+    $("ec-jb-country-indeed").value = jb.country_indeed || "india";
+  }
 
   const gm = cfg.gmail_scanner || {};
   $("ec-gm-label").value = gm.label || "professional-job_alerts";
@@ -2880,6 +2948,7 @@ function collectEngineConfigForm() {
     locations: getTagBox("ec-jb-locations-box"),
     results_wanted: Number($("ec-jb-wanted").value || 20),
     hours_old: Number($("ec-jb-hours-old").value || 72),
+    country_indeed: ($("ec-jb-country-indeed") ? $("ec-jb-country-indeed").value.trim() : "") || "india",
   };
 
   base.gmail_scanner = {
@@ -2926,8 +2995,141 @@ async function saveProfilePayload(profileObj) {
     $("cfg-profile-editor").value = JSON.stringify(res.master_profile, null, 2);
     renderProfileForm(res.master_profile);
     toast("Master Profile saved to Neon PostgreSQL!");
+    await fetchSystemStatus();
   } catch (err) {
     toast(`Save Profile failed: ${err.message}`, "error");
+  }
+}
+
+async function loadStarterTemplateIntoProfile() {
+  try {
+    const res = await apiFetch("/api/settings/profile-template");
+    const tmpl = res.template || {};
+    $("cfg-profile-editor").value = JSON.stringify(tmpl, null, 2);
+    renderProfileForm(tmpl);
+    toast("Starter template loaded into form. Replace with your real details and click Save!", "info");
+  } catch (err) {
+    toast(`Failed to load starter template: ${err.message}`, "error");
+  }
+}
+
+// ==============================================================================
+// Live Logs & System Readiness (View 7)
+// ==============================================================================
+async function loadLogsView({ silent = false } = {}) {
+  try {
+    const params = new URLSearchParams({ limit: "200" });
+    if (state.logsState.level && state.logsState.level !== "ALL") {
+      params.set("level", state.logsState.level);
+    }
+    if (state.logsState.query) {
+      params.set("q", state.logsState.query);
+    }
+    const data = await apiFetch(`/api/logs?${params.toString()}`);
+    state.logsState.data = data;
+    if (data.readiness) {
+      renderReadinessGrid(data.readiness);
+      if (state.systemStatus) {
+        state.systemStatus.readiness = data.readiness;
+        renderOnboardingAlerts(state.systemStatus);
+      }
+    }
+    renderLogsTerminal(data);
+  } catch (err) {
+    if (!silent) toast(`Failed to load logs: ${err.message}`, "error");
+  }
+}
+
+function renderReadinessGrid(readiness) {
+  const grid = $("logs-readiness-grid");
+  const badge = $("logs-readiness-badge");
+  if (!grid || !readiness) return;
+
+  if (badge) {
+    const missing = (readiness.missing_required || []).length;
+    const warns = (readiness.warnings || []).length;
+    badge.textContent = readiness.ready
+      ? warns > 0
+        ? `READY (${warns} WARN)`
+        : "ALL CHECKS NOMINAL"
+      : `${missing} MISSING REQUIRED`;
+  }
+
+  grid.innerHTML = (readiness.checks || [])
+    .map(
+      (chk) => `
+      <div class="readiness-item status-${esc(chk.status || "info")}">
+        <div class="readiness-item-head">
+          <span class="readiness-label">${esc(chk.label || chk.id)}</span>
+          <span class="readiness-status-pill">${esc(String(chk.status || "").toUpperCase())}</span>
+        </div>
+        <div class="readiness-detail">${esc(chk.detail || "")}</div>
+        ${chk.fix ? `<div class="readiness-fix">Fix: ${esc(chk.fix)}</div>` : ""}
+      </div>
+    `
+    )
+    .join("");
+}
+
+function renderLogsTerminal(data) {
+  const term = $("logs-terminal");
+  const tag = $("logs-counts-tag");
+  if (!term || !data) return;
+
+  const counts = data.counts_by_level || {};
+  if (tag) {
+    tag.textContent = `${data.total_buffered || 0} BUFFERED | ERR ${counts.ERROR || 0} | WARN ${counts.WARNING || 0}`;
+  }
+
+  const entries = data.entries || [];
+  if (!entries.length) {
+    term.innerHTML = `<div class="muted-copy">No log entries match the current filter.</div>`;
+    return;
+  }
+
+  const nearBottom = term.scrollTop + term.clientHeight >= term.scrollHeight - 40;
+  term.innerHTML = entries
+    .map((e) => {
+      const shortTs = (e.ts || "").slice(11, 19) || e.ts || "";
+      const lvl = esc(e.level || "INFO");
+      return `
+        <div class="log-row">
+          <span class="log-ts">${esc(shortTs)}</span>
+          <span class="log-lvl log-lvl-${lvl}">${lvl}</span>
+          <span class="log-src" title="${esc(e.logger || "")}">${esc(e.logger || "")}</span>
+          <span class="log-msg">${esc(e.message || "")}</span>
+        </div>
+      `;
+    })
+    .join("");
+  if (nearBottom) {
+    term.scrollTop = term.scrollHeight;
+  }
+}
+
+function downloadLogsTxt() {
+  const entries = (state.logsState.data && state.logsState.data.entries) || [];
+  const text = entries
+    .map((e) => `[${e.ts || ""}] ${String(e.level || "INFO").padEnd(7)} ${e.logger || ""}: ${e.message || ""}`)
+    .join("\n");
+  const blob = new Blob([text || "No logs buffered."], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `relentless-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function clearLogsBuffer() {
+  try {
+    await apiFetch("/api/logs/clear", { method: "POST", body: {} });
+    toast("In-memory log buffer cleared.");
+    await loadLogsView();
+  } catch (err) {
+    toast(`Clear logs failed: ${err.message}`, "error");
   }
 }
 
@@ -3307,10 +3509,40 @@ function bindEvents() {
   });
 
   $("btn-cfg-reload").addEventListener("click", loadConfigVault);
+  if ($("btn-pf-load-template")) {
+    $("btn-pf-load-template").addEventListener("click", loadStarterTemplateIntoProfile);
+  }
   $("btn-pf-sync-defaults").addEventListener("click", syncDefaultsFromProfile);
   $("btn-pf-add-exp").addEventListener("click", () => appendExperienceRow({}));
   $("btn-pf-add-edu").addEventListener("click", () => appendEducationRow({}));
   $("btn-ec-add-workday").addEventListener("click", () => appendWorkdayRow({}));
+
+  // View 7: Live Logs & Diagnostics events
+  if ($("btn-logs-refresh")) $("btn-logs-refresh").addEventListener("click", () => loadLogsView());
+  if ($("btn-logs-download")) $("btn-logs-download").addEventListener("click", downloadLogsTxt);
+  if ($("btn-logs-clear")) $("btn-logs-clear").addEventListener("click", clearLogsBuffer);
+  if ($("btn-logs-live")) {
+    $("btn-logs-live").addEventListener("click", () => {
+      state.logsState.live = !state.logsState.live;
+      $("btn-logs-live").textContent = state.logsState.live ? "● LIVE STREAM: ON" : "○ LIVE STREAM: PAUSED";
+      if (state.logsState.live) loadLogsView({ silent: true });
+    });
+  }
+  if ($("logs-search")) {
+    let logsSearchTimer = null;
+    $("logs-search").addEventListener("input", () => {
+      state.logsState.query = $("logs-search").value.trim();
+      window.clearTimeout(logsSearchTimer);
+      logsSearchTimer = window.setTimeout(() => loadLogsView({ silent: true }), 180);
+    });
+  }
+  document.querySelectorAll(".log-level-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.logsState.level = btn.dataset.logLevel || "ALL";
+      document.querySelectorAll(".log-level-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      loadLogsView();
+    });
+  });
 
   // Tag Popup Modal events
   $("tag-modal-form").addEventListener("submit", submitTagModal);

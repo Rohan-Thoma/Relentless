@@ -25,8 +25,10 @@ from src.db import (
 from src.hitl.auth import is_authorized, update_chat_id
 from src.knowledge.distiller import run_distill
 from src.knowledge.store import get_store
+from src.logging_config import format_logs_text, get_recent_logs
 from src.notify import alert
 from src.pipeline import TASK_REGISTRY
+from src.readiness import collect_readiness
 from src.tailor.resume_tailor import ensure_tailored_pdf, tailor_resume_for_job
 
 load_dotenv()
@@ -711,9 +713,10 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str, chat_id
 
     if cmd in ("/start", "/help"):
         reply = (
-            "🤖 *Relentless v2.0 Control Center*\n\n"
+            "🤖 *Relentless Control Center*\n\n"
             "• `/digest` — Send top unreviewed job matches\n"
             "• `/status` — Check database, live pipelines & tasks\n"
+            "• `/logs` — Tail recent logs & system readiness (e.g. `/logs error`, `/logs 40`)\n"
             "• `/brain` — View live OKF Brain & Market Intelligence\n"
             "• `/eval` — View live Precision@K & calibration report\n"
             "• `/reset_labels` — Soft Reset: clear button clicks (`n=0`)\n"
@@ -756,6 +759,44 @@ async def handle_slash_command(client: httpx.AsyncClient, cmd_text: str, chat_id
             f"⚙️ *Live Tasks:*\n{active_jobs_lines}\n"
             f"🌐 *Active Producers:* {sys_tasks_lines}"
         )
+    elif cmd == "/logs":
+        tokens = cmd_text.strip().split()[1:]
+        limit = 25
+        level: str | None = None
+        query_terms: list[str] = []
+        valid_levels = {"ERROR", "WARNING", "WARN", "INFO", "DEBUG", "ALL"}
+        for tok in tokens:
+            if tok.isdigit():
+                limit = max(1, min(int(tok), 80))
+            elif tok.upper() in valid_levels and level is None:
+                level = "WARNING" if tok.upper() == "WARN" else tok.upper()
+            else:
+                query_terms.append(tok)
+        query_str = " ".join(query_terms) if query_terms else None
+
+        snapshot = get_recent_logs(limit=limit, level=level, query=query_str)
+        counts = snapshot.get("counts_by_level", {})
+        readiness = await asyncio.to_thread(collect_readiness, False)
+        header_lines = [
+            f"Relentless System Logs (last {len(snapshot['entries'])} / {snapshot['total_buffered']} buffered)",
+            f"Counts — ERROR: {counts.get('ERROR', 0)} | WARN: {counts.get('WARNING', 0)} | INFO: {counts.get('INFO', 0)}",
+        ]
+        if readiness.get("missing_required"):
+            header_lines.append(f"MISSING SETUP: {', '.join(readiness['missing_required'])}")
+        if readiness.get("warnings"):
+            header_lines.append(f"WARNINGS: {len(readiness['warnings'])} (see Web UI 07 // LOGS & DIAG)")
+
+        log_body = format_logs_text(limit=limit, level=level, query=query_str)
+        full_text = "\n".join(header_lines) + "\n\n" + log_body
+
+        # Send plain text in <= 3800-char chunks so underscores/brackets never break Telegram Markdown
+        chunk_size = 3800
+        for start in range(0, len(full_text), chunk_size):
+            await client.post(
+                f"{TG_BASE}/sendMessage",
+                json={"chat_id": chat_id or CHAT_ID, "text": full_text[start : start + chunk_size]},
+            )
+        return
     elif cmd == "/brain":
         store = get_store()
         await asyncio.to_thread(store.hydrate)
@@ -1461,8 +1502,10 @@ async def _listen_loop():
 
 
 async def listen_for_button_clicks():
-    if not CHAT_ID:
-        raise ValueError("TELEGRAM_CHAT_ID is required to run the Telegram listener")
+    if not BOT_TOKEN or not CHAT_ID:
+        raise ValueError(
+            "Both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required to run the Telegram listener"
+        )
 
     if not acquire_bot_lock():
         print(
@@ -1474,7 +1517,7 @@ async def listen_for_button_clicks():
             await asyncio.sleep(5)
         print("🎧 Acquired Telegram bot advisory lock. Starting listener...", flush=True)
 
-    print("🎧 Listening for Telegram button taps, replies & /commands (/help, /brain, /status)...", flush=True)
+    print("🎧 Listening for Telegram button taps, replies & /commands (/help, /logs, /brain, /status)...", flush=True)
     try:
         await _listen_loop()
     finally:

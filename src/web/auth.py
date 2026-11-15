@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -12,12 +13,16 @@ from typing import Any
 
 from src.notify import alert
 
+logger = logging.getLogger("relentless.auth")
+
 SESSION_COOKIE_NAME = "relentless_session"
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_WINDOW_SECONDS = 900
 LOCALHOST_IPS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 _FAILED_ATTEMPTS: dict[str, list[float]] = {}
+_EPHEMERAL_LOCAL_KEY = secrets.token_hex(32)
+_WARNED_NO_SIGNING_SECRET = False
 
 
 def get_configured_secret() -> str:
@@ -27,11 +32,15 @@ def get_configured_secret() -> str:
 
 def get_signing_key() -> bytes:
     """Derives a 32-byte HMAC signing key for stateless session tokens."""
-    raw_secret = (
-        os.getenv("WEB_SESSION_SECRET")
-        or get_configured_secret()
-        or "relentless-local-dev-key"
-    )
+    global _WARNED_NO_SIGNING_SECRET
+    raw_secret = (os.getenv("WEB_SESSION_SECRET") or get_configured_secret()).strip()
+    if not raw_secret:
+        if not _WARNED_NO_SIGNING_SECRET:
+            _WARNED_NO_SIGNING_SECRET = True
+            logger.warning(
+                "WEB_SESSION_SECRET and WEB_API_KEY are unset; using ephemeral in-memory session signing key (sessions expire on restart)."
+            )
+        raw_secret = _EPHEMERAL_LOCAL_KEY
     return hashlib.sha256(raw_secret.encode("utf-8")).digest()
 
 

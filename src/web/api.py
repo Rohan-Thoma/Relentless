@@ -14,6 +14,9 @@ from urllib.parse import parse_qs, unquote
 
 from src.hitl import service
 from src.knowledge.distiller import run_distill
+from src.logging_config import clear_log_buffer, configure_logging, get_recent_logs
+from src.readiness import collect_readiness
+from src.settings_store import load_example_profile
 from src.tailor.resume_tailor import ensure_tailored_pdf
 from src.web.auth import (
     LOCALHOST_IPS,
@@ -431,6 +434,46 @@ async def _handle_okf_eval_settings_routes(
         await _send_json(send, 200, data, head_only=head_only)
         return True
 
+    if path == "/api/settings/profile-template" and method in ("GET", "HEAD"):
+        try:
+            tmpl = load_example_profile()
+        except Exception as e:
+            await _send_json(send, 404, {"ok": False, "error": str(e)}, head_only=head_only)
+            return True
+        await _send_json(send, 200, {"ok": True, "template": tmpl}, head_only=head_only)
+        return True
+
+    if path == "/api/logs" and method in ("GET", "HEAD"):
+        limit_raw = (query.get("limit") or ["100"])[0]
+        since_raw = (query.get("since_id") or ["0"])[0]
+        level_raw = (query.get("level") or [""])[0]
+        q_raw = (query.get("q") or [""])[0]
+        try:
+            limit_val = int(limit_raw)
+        except ValueError:
+            limit_val = 100
+        try:
+            since_val = int(since_raw)
+        except ValueError:
+            since_val = 0
+
+        logs_data = get_recent_logs(
+            limit=limit_val, level=level_raw or None, query=q_raw or None, since_id=since_val
+        )
+        readiness = await asyncio.to_thread(collect_readiness, True)
+        await _send_json(
+            send,
+            200,
+            {"ok": True, **logs_data, "readiness": readiness},
+            head_only=head_only,
+        )
+        return True
+
+    if path == "/api/logs/clear" and method == "POST":
+        cleared = clear_log_buffer()
+        await _send_json(send, 200, {"ok": True, "cleared": cleared})
+        return True
+
     if path == "/api/settings/profile" and method == "PUT":
         raw = await _read_body(receive)
         body, err = _parse_json_body(raw)
@@ -746,6 +789,7 @@ async def _serve_stdlib_asgi(host: str, port: int) -> None:
 
 async def run_web_server(host: str | None = None, port: int | None = None) -> None:
     """Runs the Relentless Web API server using uvicorn if available, else stdlib asyncio HTTP."""
+    configure_logging(capture_stdio=True)
     bind_host = (host or os.getenv("WEB_HOST") or "0.0.0.0").strip()
     bind_port = int(port or os.getenv("PORT", "8000"))
 

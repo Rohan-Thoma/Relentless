@@ -44,14 +44,20 @@ class TailoredResumeOutput(BaseModel):
         default_factory=list, description="3 to 5 organized skill categories tailored to the JD."
     )
     tailored_bullets_role_1: list[str] = Field(
-        description="5 surgically tailored bullets for experience[0] (Kynea Solutions LLP). Preserve all project accomplishments without cutting down."
+        default_factory=list,
+        description="Tailored bullets for experience[0], preserving all verified project accomplishments.",
     )
     tailored_bullets_role_2: list[str] = Field(
-        description="6 to 7 surgically tailored bullets for experience[1] (Starinco - ML Engineer). Preserve all project accomplishments without cutting down."
+        default_factory=list,
+        description="Tailored bullets for experience[1] (if present), preserving all verified project accomplishments.",
     )
     tailored_bullets_role_3: list[str] = Field(
         default_factory=list,
-        description="4 to 7 surgically tailored bullets for experience[2] (Starinco - Jr. ML Engineer). Preserve all project accomplishments without cutting down.",
+        description="Tailored bullets for experience[2] (if present), preserving all verified project accomplishments.",
+    )
+    tailored_bullets_by_role: list[list[str]] = Field(
+        default_factory=list,
+        description="Ordered list of tailored bullet arrays corresponding 1:1 with each entry in experience[].",
     )
     change_rationale: list[str] = Field(
         description="3 to 4 bullet points explaining specific rephrasings, keyword alignments, and domain nuances added."
@@ -138,6 +144,16 @@ class TailoredResumeOutput(BaseModel):
             return [str(item).strip() for item in v if str(item).strip()]
         return []
 
+    @field_validator("tailored_bullets_by_role", mode="before")
+    @classmethod
+    def normalize_bullets_by_role(cls, v: Any) -> list[list[str]]:
+        if not isinstance(v, list):
+            return []
+        out: list[list[str]] = []
+        for entry in v:
+            out.append(cls.normalize_bullets(entry))
+        return out
+
     @field_validator("tailored_summary", mode="before")
     @classmethod
     def normalize_summary(cls, v: Any) -> str:
@@ -214,19 +230,21 @@ async def verify_no_hallucination_with_jev(
 
 
 def render_typst_pdf(company: str, role_title: str, tailored: dict, job_id: int | None = None) -> str:
-    """Compiles a clean, single-column ATS-compliant PDF using Typst."""
+    """Compiles a clean, single-column ATS-compliant PDF using Typst for arbitrary role counts."""
     PROFILE = get_master_profile()
     output_dir = Path("output")
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_company = re.sub(r"[^a-zA-Z0-9]+", "_", company).strip("_")
+    safe_company = re.sub(r"[^a-zA-Z0-9]+", "_", company or "Company").strip("_") or "Company"
+    safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", str(PROFILE.get("name") or "Candidate")).strip("_") or "Candidate"
     suffix = f"_{job_id}" if job_id is not None else ""
     typ_path = str(output_dir / f"resume_{safe_company}{suffix}.typ")
-    pdf_path = str(output_dir / f"Rohan_Vailala_Thoma_{safe_company}{suffix}.pdf")
+    pdf_path = str(output_dir / f"{safe_name}_{safe_company}{suffix}.pdf")
 
-    exp0 = PROFILE["experience"][0]
-    exp1 = PROFILE["experience"][1]
-    exp2 = PROFILE["experience"][2] if len(PROFILE["experience"]) > 2 else None
-    edu0 = PROFILE["education"][0]
+    experiences = PROFILE.get("experience") or []
+    if not isinstance(experiences, list) or len(experiences) == 0:
+        raise ValueError(
+            "Master profile must contain at least 1 experience entry to generate a tailored resume PDF."
+        )
 
     # Render skill categories cleanly
     skill_cats = tailored.get("skill_categories", [])
@@ -240,25 +258,31 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict, job_id: int 
         skills_block = "\n".join(cats_typ_lines)
     else:
         skills_prioritized = tailored.get("matched_keywords", []) + [
-            s for s in PROFILE["core_skills"] if s not in tailored.get("matched_keywords", [])
+            s for s in PROFILE.get("core_skills", []) if s not in tailored.get("matched_keywords", [])
         ]
         skills_block = escape_typst(", ".join(skills_prioritized))
 
-    b1_typ = "\n".join(f"- {escape_typst(b)}" for b in tailored.get("tailored_bullets_role_1", []))
-    b2_typ = "\n".join(f"- {escape_typst(b)}" for b in tailored.get("tailored_bullets_role_2", []))
-    b3_bullets = tailored.get("tailored_bullets_role_3", [])
-    b3_typ = "\n".join(f"- {escape_typst(b)}" for b in b3_bullets) if b3_bullets else ""
+    by_role = tailored.get("tailored_bullets_by_role")
+    exp_blocks: list[str] = []
+    for idx, exp in enumerate(experiences):
+        bullets: list[str] = []
+        if isinstance(by_role, list) and idx < len(by_role) and isinstance(by_role[idx], list) and by_role[idx]:
+            bullets = by_role[idx]
+        elif idx < 3:
+            bullets = list(tailored.get(f"tailored_bullets_role_{idx + 1}") or [])
+        if not bullets and (idx >= 3 or (not tailored.get("tailored_bullets_role_1") and not by_role)):
+            bullets = list(exp.get("bullets") or [])
 
-    exp3_block = ""
-    if exp2 and b3_typ:
-        exp3_block = f"""
-#v(3pt)
-#grid(columns: (1fr, auto),
-  [*{escape_typst(exp2['company'])}* — _{escape_typst(exp2['role'])}_],
-  [{escape_typst(exp2['dates'])}]
+        bullets_typ = "\n".join(f"- {escape_typst(b)}" for b in bullets)
+        spacer = "\n#v(3pt)\n" if idx > 0 else ""
+        exp_blocks.append(
+            f"""{spacer}#grid(columns: (1fr, auto),
+  [*{escape_typst(exp.get('company', 'Company'))}* — _{escape_typst(exp.get('role', 'Role'))}_],
+  [{escape_typst(exp.get('dates', ''))}]
 )
-{b3_typ}
-"""
+{bullets_typ}"""
+        )
+    exp_section = "\n".join(exp_blocks)
 
     # Clickable hyperlinks for email, linkedin, github
     li_url = PROFILE.get("linkedin", "")
@@ -278,7 +302,9 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict, job_id: int 
     email = PROFILE.get("email", "")
     email_elem = f'#link("mailto:{email}")[{escape_typst(email)}]' if email else ""
 
-    contact_parts = [escape_typst(PROFILE["location"])]
+    contact_parts: list[str] = []
+    if PROFILE.get("location"):
+        contact_parts.append(escape_typst(PROFILE["location"]))
     if PROFILE.get("phone"):
         contact_parts.append(escape_typst(PROFILE["phone"]))
     if email_elem:
@@ -289,12 +315,28 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict, job_id: int 
         contact_parts.append(gh_elem)
     contact_line = " | ".join(contact_parts)
 
+    educations = PROFILE.get("education") or []
+    edu_section = ""
+    if isinstance(educations, list) and educations:
+        edu_lines = []
+        for edu in educations:
+            deg = escape_typst(str(edu.get("degree") or "Degree"))
+            inst = escape_typst(str(edu.get("institution") or "Institution"))
+            dates = escape_typst(str(edu.get("dates") or ""))
+            date_suffix = f" ({dates})" if dates else ""
+            edu_lines.append(f"*{deg}* — {inst}{date_suffix}")
+        edu_section = (
+            "\n#v(4pt)\n#line(length: 100%, stroke: 0.5pt)\n"
+            '#text(size: 10.5pt, weight: "bold")[EDUCATION] \\\n'
+            + " \\\n".join(edu_lines)
+        )
+
     typst_source = f"""#set page(paper: "a4", margin: (x: 1.2cm, y: 1.0cm))
 #set text(size: 9.5pt)
 #set par(justify: true, leading: 0.52em)
 
 #align(center)[
-  #text(size: 15pt, weight: "bold")[{escape_typst(PROFILE['name'])}] \\
+  #text(size: 15pt, weight: "bold")[{escape_typst(PROFILE.get('name', 'Candidate'))}] \\
   #v(2pt)
   #text(size: 8.5pt)[{contact_line}]
 ]
@@ -302,34 +344,18 @@ def render_typst_pdf(company: str, role_title: str, tailored: dict, job_id: int 
 #v(4pt)
 #line(length: 100%, stroke: 0.5pt)
 #text(size: 10.5pt, weight: "bold")[EXECUTIVE SUMMARY] \\
-{escape_typst(tailored['tailored_summary'])}
+{escape_typst(tailored.get('tailored_summary', ''))}
 
 #v(4pt)
 #line(length: 100%, stroke: 0.5pt)
 #text(size: 10.5pt, weight: "bold")[EXPERIENCE]
 
-#grid(columns: (1fr, auto),
-  [*{escape_typst(exp0['company'])}* — _{escape_typst(exp0['role'])}_],
-  [{escape_typst(exp0['dates'])}]
-)
-{b1_typ}
+{exp_section}
 
-#v(3pt)
-#grid(columns: (1fr, auto),
-  [*{escape_typst(exp1['company'])}* — _{escape_typst(exp1['role'])}_],
-  [{escape_typst(exp1['dates'])}]
-)
-{b2_typ}
-{exp3_block}
 #v(4pt)
 #line(length: 100%, stroke: 0.5pt)
 #text(size: 10.5pt, weight: "bold")[TECHNICAL SKILLS]
-{skills_block}
-
-#v(4pt)
-#line(length: 100%, stroke: 0.5pt)
-#text(size: 10.5pt, weight: "bold")[EDUCATION] \\
-*{escape_typst(edu0['degree'])}* — {escape_typst(edu0['institution'])} ({escape_typst(edu0['dates'])})
+{skills_block}{edu_section}
 """
     with open(typ_path, "w", encoding="utf-8") as f:
         f.write(typst_source)
@@ -368,31 +394,44 @@ async def tailor_resume_for_job(job: dict, custom_instruction: str = "") -> dict
 
     # Format verified background for the system prompt
     exp_summary = []
-    for idx, e in enumerate(PROFILE["experience"], 1):
-        bullets = "\n".join(f"  - {b}" for b in e.get("bullets", []))
-        exp_summary.append(f"Role {idx}: {e['role']} at {e['company']} ({e.get('dates', '')})\n{bullets}")
+    role_rules = []
+    experiences = PROFILE.get("experience") or []
+    if not experiences:
+        raise ValueError(
+            "Master profile has no experience entries; at least 1 experience role is required for resume tailoring."
+        )
+    for idx, e in enumerate(experiences, 1):
+        bullets_list = e.get("bullets") or []
+        bullets = "\n".join(f"  - {b}" for b in bullets_list)
+        exp_summary.append(
+            f"Role {idx}: {e.get('role', 'Role')} at {e.get('company', 'Company')} ({e.get('dates', '')})\n{bullets}"
+        )
+        hint = f"preserve depth (~{len(bullets_list)} comprehensive bullets)" if bullets_list else "3 to 5 comprehensive bullets"
+        role_rules.append(
+            f"   - Role {idx} ({e.get('company', 'Company')} — {e.get('role', 'Role')}): {hint}."
+        )
     verified_exp_text = "\n\n".join(exp_summary)
+    role_rules_text = "\n".join(role_rules)
 
     user_instruction_block = (
         f"\nUSER CUSTOM INSTRUCTION / REVISION REQUEST:\n{custom_instruction}\n" if custom_instruction else ""
     )
 
-    system_prompt = f"""You are an expert ATS Resume Strategist and Principal AI/Python Engineer.
+    system_prompt = f"""You are an expert ATS Resume Strategist and Principal Software/AI Engineer.
 Your task is to surgically tailor the candidate's verified resume for the following job description.
 
 STRICT CONSTRAINTS (ZERO-HALLUCINATION POLICY):
 1. NEVER fabricate employers, fake degrees, or fake metrics.
 2. Every tailored bullet must be anchored in the candidate's actual, verified projects.
-3. You MAY rephrase bullets to highlight relevant keywords from the JD (e.g., phrasing agent pipelines using LangGraph terms if the JD requests LangGraph, or highlighting FastAPI optimizations).
-4. For Kynea Solutions (Role 1), output exactly 5 comprehensive bullets.
-5. For Starinco ML Engineer (Role 2), output exactly 6 to 7 comprehensive bullets.
-6. For Starinco Jr. ML Engineer (Role 3), output 4 to 7 comprehensive bullets.
-7. Technical skills must be categorized into 3-5 intuitive groups (e.g., 'GenAI & Agentic Systems', 'Computer Vision & Deep Learning', 'Backend & Cloud MLOps').
-8. Provide a 3-sentence high-impact executive summary.
+3. You MAY rephrase bullets to highlight relevant keywords from the JD cleanly and accurately.
+4. Preserve depth across each experience role in `tailored_bullets_by_role` (matching all {len(experiences)} role(s) in order) AND populate `tailored_bullets_role_1`..`role_3` for up to the first 3 roles:
+{role_rules_text}
+5. Technical skills must be categorized into 3-5 intuitive groups relevant to the candidate's stack and the JD.
+6. Provide a 3-sentence high-impact executive summary.
 
 CANDIDATE'S VERIFIED BACKGROUND:
-Name: {PROFILE['name']}
-Core Skills: {', '.join(PROFILE['core_skills'])}
+Name: {PROFILE.get('name', 'Candidate')}
+Core Skills: {', '.join(PROFILE.get('core_skills', []))}
 
 Verified Experience:
 {verified_exp_text}
@@ -414,6 +453,7 @@ Return strictly valid JSON matching this schema:
     {"category": "Category Name 1", "skills": ["skill1", "skill2", ...]},
     {"category": "Category Name 2", "skills": ["skill1", "skill2", ...]}
   ],
+  "tailored_bullets_by_role": [["bullet 1", ...]],
   "tailored_bullets_role_1": ["bullet 1", "bullet 2", ...],
   "tailored_bullets_role_2": ["bullet 1", "bullet 2", ...],
   "tailored_bullets_role_3": ["bullet 1", "bullet 2", ...],

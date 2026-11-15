@@ -67,7 +67,7 @@ def get_jobboards_parameters(
                         if role and role not in terms:
                             terms.append(role)
             except Exception as e:
-                logger.debug("Could not read master_profile for search terms: %s", e)
+                logger.warning("Jobboards search_terms fallback could not read master_profile: %s", e)
 
     # 4. Locations: prioritize explicit config.jobboards.locations
     locs = list(locations) if locations else []
@@ -87,7 +87,7 @@ def get_jobboards_parameters(
                     if city and city not in locs:
                         locs.append(city)
             except Exception as e:
-                logger.debug("Could not read master_profile for locations: %s", e)
+                logger.warning("Jobboards locations fallback could not read master_profile: %s", e)
 
             if not locs and cfg.candidate_preferences and cfg.candidate_preferences.allowed_locations:
                 for al in cfg.candidate_preferences.allowed_locations:
@@ -119,9 +119,19 @@ def _scrape_sync(
     location: str = "",
     results_wanted: int = 20,
     hours_old: int = 72,
+    country_indeed: str | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     target = sites or (site if isinstance(site, list) else ([site] if site else ["naukri", "linkedin", "indeed"]))
+    resolved_country = (country_indeed or "").strip()
+    if not resolved_country:
+        try:
+            jb_cfg = getattr(load_config(), "jobboards", None)
+            resolved_country = (getattr(jb_cfg, "country_indeed", None) or "").strip()
+        except Exception:
+            resolved_country = ""
+    if not resolved_country:
+        resolved_country = "india"
     try:
         df = scrape_jobs(
             site_name=target,
@@ -129,13 +139,13 @@ def _scrape_sync(
             location=location,
             results_wanted=results_wanted,
             hours_old=hours_old,
-            country_indeed="india",
+            country_indeed=resolved_country,
             linkedin_fetch_description=True,
             verbose=0,
         )
         return df if df is not None and not df.empty else pd.DataFrame()
     except Exception as e:
-        logger.warning(
+        logger.error(
             "JobSpy scrape failed for sites=%s, term='%s', loc='%s': %s",
             target,
             search_term,
@@ -159,6 +169,14 @@ async def poll_jobboards(
         results_wanted=results_wanted,
         hours_old=hours_old,
     )
+
+    if not terms or not locs:
+        msg = (
+            "Jobboards poller cannot run without search_terms and locations. "
+            "Configure them in 06 // CONFIG & VAULT -> Engine Config or set up your Master Profile."
+        )
+        logger.error(msg)
+        raise ValueError(msg)
 
     combos = [(term, loc) for term in terms for loc in locs]
     total_combos = len(combos)

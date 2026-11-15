@@ -232,21 +232,16 @@ def distill_market_intelligence(store) -> int:
         company_counts[comp] += 1
         ats_counts[ats] += 1
 
-        # Normalize location buckets
-        if any(w in loc for w in ("hyderabad", "secunderabad", "telangana")):
-            location_counts["Hyderabad"] += 1
+        # Normalize location buckets globally without hardcoded regional lock-in
+        if any(w in loc for w in ("remote", "anywhere", "worldwide", "global", "wfh")):
+            location_counts["Remote / Anywhere"] += 1
         elif any(w in loc for w in ("bangalore", "bengaluru", "karnataka")):
             location_counts["Bengaluru"] += 1
-        elif any(w in loc for w in ("pune", "mumbai", "maharashtra")):
-            location_counts["Pune / Mumbai"] += 1
-        elif any(w in loc for w in ("delhi", "gurgaon", "gurugram", "noida", "ncr")):
-            location_counts["NCR (Delhi/Gurgaon/Noida)"] += 1
-        elif any(w in loc for w in ("chennai", "tamil nadu")):
-            location_counts["Chennai"] += 1
-        elif any(w in loc for w in ("remote", "anywhere", "worldwide", "global", "wfh")):
-            location_counts["Remote / Anywhere"] += 1
+        elif any(w in loc for w in ("gurgaon", "gurugram", "noida", "delhi", "ncr")):
+            location_counts["NCR (Delhi/Gurugram/Noida)"] += 1
         else:
-            location_counts["Other India / International"] += 1
+            primary = (j.get("location") or "Unspecified").split(",")[0].strip().title()
+            location_counts[primary or "Unspecified"] += 1
 
         full_text = f"{(j.get('title') or '')} {(j.get('jd_text') or '')}".lower()
         for term in HOT_TECH_TERMS:
@@ -300,7 +295,7 @@ def distill_market_intelligence(store) -> int:
         f"• **{loc}**: {cnt} jobs ({cnt / total_jobs * 100:.1f}%)" for loc, cnt in location_counts.most_common()
     ]
     body_loc = (
-        f"# India & Remote Geographic Distribution ({total_jobs} roles analysed)\n\n" + "\n".join(loc_lines)
+        f"# Geographic & Remote Distribution ({total_jobs} roles analysed)\n\n" + "\n".join(loc_lines)
     )
     store.upsert(
         Concept(

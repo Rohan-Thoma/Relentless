@@ -94,7 +94,7 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
         "model": model_id,
         "state": {
             "candidate": {
-                "location": PROFILE.get("location", "Hyderabad, India"),
+                "location": PROFILE.get("location", ""),
                 "core_skills": PROFILE.get("core_skills", []),
             },
             "job_listing": {
@@ -122,7 +122,7 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
                     "Weak match: shares only 1-2 peripheral keywords or wrong primary language (e.g., pure C++ embedded or .NET).",
                     "Moderate match: general software, data, or cloud engineering role with partial Python/SQL overlap.",
                     "Strong match: directly aligns with Python Backend, FastAPI, PostgreSQL, Data, or ML engineering at early-to-mid seniority.",
-                    "Dream role: exact match for AI Engineer, Agentic LLM workflows, LangGraph, RAG, or Python Backend Engineer in India/Remote.",
+                    "Dream role: exact match for AI Engineer, Agentic LLM workflows, LangGraph, RAG, or Python Backend Engineer matching the candidate's target roles and locations/Remote.",
                 ],
             },
             "persona": {

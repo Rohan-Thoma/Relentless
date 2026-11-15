@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+import secrets
 import shutil
 import sys
 import time
@@ -15,11 +17,12 @@ from src.httpx_utils import get_with_retry
 from src.knowledge.distiller import run_distill
 from src.knowledge.export import export_bundle
 from src.knowledge.store import flush, get_store, hydrate
+from src.logging_config import configure_logging
 from src.main_loop import main as run_loop
+from src.readiness import collect_readiness
 from src.settings_store import (
     EXAMPLE_PROFILE_PATH,
     LOCAL_PROFILE_PATH,
-    load_master_profile,
     sync_local_to_db,
 )
 
@@ -27,32 +30,41 @@ ENV_FILE = ".env"
 
 
 def interactive_setup():
-    print("\n🚀 Welcome to the Relentless Plug-and-Play Setup Wizard!\n")
+    print("\n🚀 Welcome to the Relentless Setup Wizard!\n")
     if not os.path.exists(ENV_FILE):
         shutil.copyfile(".env.example", ENV_FILE)
     load_dotenv(ENV_FILE, override=True)
 
-    def prompt_key(env_name: str, label: str, required: bool = True):
+    def prompt_key(env_name: str, label: str, required: bool = True, default_val: str = ""):
         current = os.getenv(env_name, "").strip()
-        hint = f" [current: {current[:12]}...]" if current else ""
+        hint = f" [current: {current[:10]}...]" if current else (" [Enter for generated default]" if default_val else "")
         val = input(f"👉 {label}{hint}: ").strip()
-        if val:
-            set_key(ENV_FILE, env_name, val)
-            os.environ[env_name] = val
+        chosen = val or current or default_val
+        if val or (not current and default_val):
+            set_key(ENV_FILE, env_name, chosen)
+            os.environ[env_name] = chosen
         elif required and not current:
-            print(f"⚠️  {env_name} is required!")
+            print(f"❌ {env_name} is required!")
 
     prompt_key("DATABASE_URL", "1. Neon PostgreSQL URL (postgresql://...)")
     prompt_key("OPENROUTER_API_KEY", "2. OpenRouter API Key (for Jev System-1 Triage)")
-    prompt_key("OPENAI_API_KEY", "3. OpenAI API Key (optional, for $3 credit Resume Tailor)", required=False)
-    prompt_key("TELEGRAM_BOT_TOKEN", "4. Telegram Bot Token (from @BotFather)")
+    prompt_key("OPENAI_API_KEY", "3. OpenAI API Key (optional, for Tailored Resume PDF)", required=False)
+    generated_key = secrets.token_urlsafe(32)
+    prompt_key(
+        "WEB_API_KEY",
+        "4. Web Command Center API Key / Login Password",
+        required=False,
+        default_val=generated_key,
+    )
+    print("   🔐 WEB_API_KEY configured (keep this secret for Web UI login!).")
+    prompt_key("TELEGRAM_BOT_TOKEN", "5. Telegram Bot Token from @BotFather (optional)", required=False)
 
-    # Auto-detect Telegram Chat ID if missing!
+    # Auto-detect Telegram Chat ID if token provided and chat ID missing
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if bot_token and not chat_id:
         print("\n📲 Auto-Detecting your Telegram Chat ID...")
-        print("   👉 Open Telegram right now and send 'hello' to your bot!")
+        print("   👉 Open Telegram right now and send 'hello' to your bot (or press Ctrl+C to skip)...")
         for _ in range(20):
             try:
                 r = httpx.get(f"https://api.telegram.org/bot{bot_token}/getUpdates", timeout=5.0).json()
@@ -63,24 +75,71 @@ def interactive_setup():
                     os.environ["TELEGRAM_CHAT_ID"] = detected_id
                     print(f"   ✅ Auto-detected TELEGRAM_CHAT_ID: {detected_id}!")
                     break
+            except KeyboardInterrupt:
+                print("\n   ⏭️ Skipped Telegram Chat ID auto-detect.")
+                break
             except Exception:
                 pass
             time.sleep(2)
 
-    # Create local gitignored master_profile.json from example if not present
+    # Personalize local gitignored master_profile.json interactively instead of copying template silently
     if not os.path.exists(LOCAL_PROFILE_PATH):
-        shutil.copyfile(EXAMPLE_PROFILE_PATH, LOCAL_PROFILE_PATH)
-        print(f"\n📄 Created local gitignored {LOCAL_PROFILE_PATH} from template.")
+        print("\n🪪 Candidate Master Profile Setup (gitignored locally & synced to Neon DB):")
+        use_prompt = input("👉 Configure your basic details now? [Y/n]: ").strip().lower()
+        if use_prompt in ("", "y", "yes"):
+            with open(EXAMPLE_PROFILE_PATH, "r", encoding="utf-8") as f:
+                profile = json.load(f)
+            name = input("   Full Name: ").strip()
+            email = input("   Email: ").strip()
+            location = input("   Location (e.g., Bengaluru, India / Austin, TX / Remote): ").strip()
+            skills_raw = input("   Core Skills (comma-separated): ").strip()
+            if name:
+                profile["name"] = name
+                parts = name.split()
+                profile.setdefault("application_defaults", {})["full_name"] = name
+                profile["application_defaults"]["first_name"] = parts[0]
+                profile["application_defaults"]["last_name"] = parts[-1] if len(parts) > 1 else ""
+            if email:
+                profile["email"] = email
+            if location:
+                profile["location"] = location
+                profile.setdefault("application_defaults", {})["current_city"] = location
+            if skills_raw:
+                profile["core_skills"] = [s.strip() for s in skills_raw.split(",") if s.strip()]
+            with open(LOCAL_PROFILE_PATH, "w", encoding="utf-8") as f:
+                json.dump(profile, f, indent=2)
+            print(f"   ✅ Wrote {LOCAL_PROFILE_PATH}. Edit experience/education there OR in Web UI -> 06 // CONFIG & VAULT.")
+        else:
+            print("   ⏭️ Skipped local file creation. You can configure your profile visually in Web UI -> 06 // CONFIG & VAULT.")
 
-    print("\n🗄️  Initializing Neon PostgreSQL schema & syncing private profile...")
+    print("\n🗄️  Initializing PostgreSQL schema & syncing config...")
     init_db()
-    sync_local_to_db()
-    print("\n🎉 Setup Complete! Edit 'config/master_profile.json' anytime and run 'python manage.py sync'.")
+    if os.path.exists(LOCAL_PROFILE_PATH):
+        sync_local_to_db()
+    else:
+        print("ℹ️  Skipped profile DB sync (no local config/master_profile.json yet). Add one via Web UI -> 06 // CONFIG & VAULT.")
+    print("\n🎉 Setup Complete! Run 'python manage.py doctor' or 'python manage.py run'.")
 
 
 def run_doctor():
     load_dotenv(ENV_FILE, override=True)
-    print("\n🩺 Running Relentless System Health Check...\n")
+    configure_logging(capture_stdio=False)
+    print("\n🩺 Running Relentless System Health & Readiness Check...\n")
+
+    report = collect_readiness(check_db=True)
+    icon_map = {"ok": "✅", "warning": "⚠️", "error": "❌", "disabled": "⏭️"}
+    for chk in report["checks"]:
+        icon = icon_map.get(chk["status"], "•")
+        print(f"  {icon} {chk['label']}: {chk['detail']}")
+        if chk.get("fix"):
+            print(f"     ↳ Fix: {chk['fix']}")
+
+    try:
+        pending = pending_migrations()
+        print(f"  ✅ Migrations: {len(pending)} pending")
+    except Exception as e:
+        print(f"  ❌ Migrations: {e}")
+
     try:
         pool = get_pool()
         with pool.connection() as conn, conn.cursor() as cur:
@@ -89,24 +148,6 @@ def run_doctor():
         print("  ✅ Connection pool: OK")
     except Exception as e:
         print(f"  ❌ Connection pool: {e}")
-
-    total = 0
-    has_cloud_profile = False
-    try:
-        with get_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS total FROM jobs;")
-            total = cur.fetchone()["total"]
-            cur.execute("SELECT COUNT(*) AS s FROM app_settings WHERE key = 'master_profile';")
-            has_cloud_profile = cur.fetchone()["s"] > 0
-        print(f"  ✅ Neon PostgreSQL: Connected ({total} jobs in DB)")
-    except Exception as e:
-        print(f"  ❌ Neon PostgreSQL: {e}")
-
-    try:
-        pending = pending_migrations()
-        print(f"  ✅ Migrations: {len(pending)} pending")
-    except Exception as e:
-        print(f"  ❌ Migrations: {e}")
 
     try:
         async def _smoke():
@@ -119,17 +160,9 @@ def run_doctor():
     except Exception as e:
         print(f"  ⚠️ Retry helper smoke: {e}")
 
-    # Profile readiness
-    try:
-        load_master_profile()
-        print("  ✅ Master profile: configured")
-    except Exception as e:
-        print(f"  ❌ Master profile: {e}")
-    print(f"  ✅ Private Cloud Profile Synced: {'Yes (Railway-ready!)' if has_cloud_profile else 'No (Run: python manage.py sync)'}")
-    print(f"  ✅ Local master_profile.json gitignored: {os.path.exists(LOCAL_PROFILE_PATH)}")
-    print(f"  ✅ OpenRouter Key Set: {bool(os.getenv('OPENROUTER_API_KEY'))}")
-    print(f"  ✅ OpenAI Key Set: {bool(os.getenv('OPENAI_API_KEY'))}")
-    print(f"  ✅ Telegram Bot Configured: {bool(os.getenv('TELEGRAM_BOT_TOKEN') and os.getenv('TELEGRAM_CHAT_ID'))}\n")
+    print(
+        f"\n  Overall Status: {'🟢 READY' if report['ready'] else '🔴 INCOMPLETE — fix ❌ items above'}\n"
+    )
     try:
         close_pool()
     except Exception:
@@ -212,18 +245,22 @@ if __name__ == "__main__":
     elif cmd == "eval":
         run_evaluation()
     elif cmd == "run":
+        configure_logging(capture_stdio=True)
         run_args = _parse_run_flags(sys.argv[2:])
         asyncio.run(run_loop(**run_args))
     elif cmd == "ingest":
+        configure_logging(capture_stdio=True)
         from src.ingestors.ats_poller import run_ingestion
 
         run_args = _parse_run_flags(sys.argv[2:])
         run_args.pop("once", None)
         asyncio.run(run_ingestion(**run_args))
     elif cmd == "bot":
+        configure_logging(capture_stdio=True)
         print("🤖 Starting Telegram bot listener ONLY (independent of ingestion pipeline)...")
         asyncio.run(listen_for_button_clicks())
     elif cmd == "web":
+        configure_logging(capture_stdio=True)
         from src.web.api import run_web_server
 
         init_db()
@@ -231,6 +268,7 @@ if __name__ == "__main__":
         print("🌐 Starting Relentless Web Command Center API...")
         asyncio.run(run_web_server())
     elif cmd == "distill":
+        configure_logging(capture_stdio=True)
         init_db()
         hydrate()
         run_distill()
