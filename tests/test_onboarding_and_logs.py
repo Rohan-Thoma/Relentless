@@ -278,3 +278,25 @@ def test_no_personal_hardcodes_or_disallowed_css():
 
     app_js = (root / "web/app.js").read_text()
     assert '"logs"' in app_js
+
+
+@pytest.mark.asyncio
+async def test_main_loop_once_fails_loudly_when_readiness_incomplete(monkeypatch):
+    import src.main_loop as ml
+
+    monkeypatch.setattr(ml, "init_db", lambda: None)
+    monkeypatch.setattr(ml, "hydrate", lambda: None)
+    monkeypatch.setattr(ml, "alert", lambda msg: None)
+    monkeypatch.setattr(
+        ml,
+        "log_startup_readiness",
+        lambda: {
+            "ready": False,
+            "missing_required": ["OPENROUTER_API_KEY"],
+            "warnings": [],
+            "checks": [],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="missing required setup: OPENROUTER_API_KEY"):
+        await ml.main(once=True)

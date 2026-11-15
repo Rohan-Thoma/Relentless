@@ -207,6 +207,11 @@ async def test_main_loop_scrape_first_and_once(monkeypatch):
     monkeypatch.setattr(ml, "run_distill", lambda: {"concepts": 0})
     monkeypatch.setattr(ml, "init_db", lambda: None)
     monkeypatch.setattr(ml, "hydrate", lambda: None)
+    monkeypatch.setattr(
+        ml,
+        "log_startup_readiness",
+        lambda: {"ready": True, "missing_required": [], "warnings": [], "checks": []},
+    )
 
     # Scrape only with once=True
     await ml.main(scrape_only=True, once=True)
