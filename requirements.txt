@@ -16,13 +16,11 @@ python-jobspy
 playwright
 
 # AI / Agents
-groq
 langgraph
 langgraph-checkpoint-postgres
 
-# Testing & Development (Merged from requirements-dev.txt)
+# Testing & Development
 pytest
 pytest-asyncio
 ruff
 respx
-

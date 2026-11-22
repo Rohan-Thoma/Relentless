@@ -101,8 +101,10 @@ def collect_readiness(check_db: bool = True) -> dict[str, Any]:
                 "label": "Engine Config (AppConfig)",
                 "status": "ok",
                 "detail": (
-                    f"Apply mode: {cfg.automation.apply_mode}; "
-                    f"sites: {', '.join(cfg.jobboards.sites or []) or 'none'}; "
+                    f"Apply mode: {cfg.automation.normalized_apply_mode()}; "
+                    f"tailor: {cfg.models.tailor.provider}/{cfg.models.tailor.model}; "
+                    f"embeddings: {cfg.models.embeddings.provider}/{cfg.models.embeddings.model}; "
+                    f"location rules: {len(cfg.effective_location_policy().rules)} ({cfg.effective_location_policy().operator}); "
                     f"sources synced: {'DB' if has_db_config else 'config.yaml'}."
                 ),
                 "fix": "",

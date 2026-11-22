@@ -1,10 +1,11 @@
+from datetime import UTC, datetime
 import json
 import os
-import time
 from pathlib import Path
+import time
 
-import yaml
 from psycopg.types.json import Jsonb
+import yaml
 
 from src.db import get_connection
 
@@ -39,37 +40,138 @@ def _profile_fingerprint():
     return ("none", 0)
 
 
-def sync_local_to_db():
-    """Pushes local gitignored master_profile.json and config.yaml into private Neon DB."""
+def _to_epoch(val) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        dt = val if val.tzinfo is not None else val.replace(tzinfo=UTC)
+        return dt.timestamp()
+    try:
+        dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def get_sync_status() -> dict:
+    """Compares local config/profile timestamps against Neon DB app_settings (Git-like status)."""
+    db_times: dict[str, float | None] = {"master_profile": None, "config_yaml": None}
+    try:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT key, updated_at FROM app_settings WHERE key IN ('master_profile', 'config_yaml');")
+            for r in cur.fetchall() or []:
+                db_times[str(r["key"])] = _to_epoch(r.get("updated_at"))
+    except Exception:
+        pass
+
+    result = {}
+    for key, path in (("master_profile", LOCAL_PROFILE_PATH), ("config_yaml", LOCAL_CONFIG_PATH)):
+        local_ts = os.path.getmtime(path) if os.path.exists(path) else None
+        db_ts = db_times.get(key)
+        if local_ts is None and db_ts is None:
+            state = "missing"
+        elif local_ts is not None and db_ts is None:
+            state = "local_only"
+        elif local_ts is None and db_ts is not None:
+            state = "db_only"
+        elif db_ts - local_ts > 2.0:
+            state = "db_newer"
+        elif local_ts - db_ts > 2.0:
+            state = "local_newer"
+        else:
+            state = "in_sync"
+        result[key] = {"state": state, "local_mtime": local_ts, "db_updated_at": db_ts, "path": path}
+    return result
+
+
+def pull_db_to_local() -> dict:
+    """Git-like pull: downloads latest master_profile and config_yaml from Neon DB to local files."""
+    pulled: dict[str, bool] = {"master_profile": False, "config_yaml": False}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT key, value, updated_at FROM app_settings WHERE key IN ('master_profile', 'config_yaml');")
+        rows = {str(r["key"]): r for r in (cur.fetchall() or [])}
+
+    if "master_profile" in rows and isinstance(rows["master_profile"].get("value"), dict):
+        Path(LOCAL_PROFILE_PATH).parent.mkdir(parents=True, exist_ok=True)
+        with open(LOCAL_PROFILE_PATH, "w", encoding="utf-8") as f:
+            json.dump(rows["master_profile"]["value"], f, indent=2, ensure_ascii=False)
+        pulled["master_profile"] = True
+        print(f"⬇️  Pulled Neon DB -> {LOCAL_PROFILE_PATH}")
+
+    if "config_yaml" in rows and isinstance(rows["config_yaml"].get("value"), dict):
+        Path(LOCAL_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        with open(LOCAL_CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.safe_dump(rows["config_yaml"]["value"], f, sort_keys=False, allow_unicode=True)
+        pulled["config_yaml"] = True
+        print(f"⬇️  Pulled Neon DB -> {LOCAL_CONFIG_PATH}")
+
+    _invalidate_profile_cache()
+    try:
+        from src.config import invalidate_config
+
+        invalidate_config()
+    except Exception:
+        pass
+    return pulled
+
+
+def sync_local_to_db(force: bool = False):
+    """Git-like safe push: refuses to overwrite newer Neon DB changes unless force=True."""
+    status = get_sync_status()
+    skipped: list[str] = []
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             if os.path.exists(LOCAL_PROFILE_PATH):
-                with open(LOCAL_PROFILE_PATH, "r", encoding="utf-8") as f:
-                    profile_data = json.load(f)
-                cur.execute(
-                    """
-                    INSERT INTO app_settings (key, value, updated_at)
-                    VALUES ('master_profile', %s, NOW())
-                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
-                    """,
-                    (Jsonb(profile_data),),
-                )
-                print("🔒 Synced private master_profile.json -> Neon PostgreSQL (app_settings)!")
+                if not force and status["master_profile"]["state"] == "db_newer":
+                    skipped.append("master_profile")
+                    print(
+                        "⚠️  SKIPPED master_profile.json: Neon DB version is NEWER (edited in Web UI/Cloud)! "
+                        "Run 'python manage.py pull' first, or 'python manage.py sync --force' to overwrite."
+                    )
+                else:
+                    with open(LOCAL_PROFILE_PATH, "r", encoding="utf-8") as f:
+                        profile_data = json.load(f)
+                    cur.execute(
+                        """
+                        INSERT INTO app_settings (key, value, updated_at)
+                        VALUES ('master_profile', %s, NOW())
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+                        """,
+                        (Jsonb(profile_data),),
+                    )
+                    print("🔒 Synced private master_profile.json -> Neon PostgreSQL (app_settings)!")
 
             if os.path.exists(LOCAL_CONFIG_PATH):
-                with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
-                    cfg_data = yaml.safe_load(f)
-                cur.execute(
-                    """
-                    INSERT INTO app_settings (key, value, updated_at)
-                    VALUES ('config_yaml', %s, NOW())
-                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
-                    """,
-                    (Jsonb(cfg_data),),
-                )
-                print("🔒 Synced config.yaml -> Neon PostgreSQL (app_settings)!")
+                if not force and status["config_yaml"]["state"] == "db_newer":
+                    skipped.append("config_yaml")
+                    print(
+                        "⚠️  SKIPPED config.yaml: Neon DB version is NEWER (edited in Web UI/Cloud)! "
+                        "Run 'python manage.py pull' first, or 'python manage.py sync --force' to overwrite."
+                    )
+                else:
+                    with open(LOCAL_CONFIG_PATH, "r", encoding="utf-8") as f:
+                        cfg_data = yaml.safe_load(f)
+                    cur.execute(
+                        """
+                        INSERT INTO app_settings (key, value, updated_at)
+                        VALUES ('config_yaml', %s, NOW())
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+                        """,
+                        (Jsonb(cfg_data),),
+                    )
+                    print("🔒 Synced config.yaml -> Neon PostgreSQL (app_settings)!")
         conn.commit()
     _invalidate_profile_cache()
+    try:
+        from src.config import invalidate_config
+
+        invalidate_config()
+    except Exception:
+        pass
+    return {"skipped": skipped}
 
 
 def _invalidate_profile_cache():

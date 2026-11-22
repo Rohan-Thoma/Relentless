@@ -1,37 +1,16 @@
-# ============================================
-# Relentless Job Search Agent - Config
-# ============================================
-# SMARTRECRUITERS: ATS with public Posting API.
-#   URL format: https://jobs.smartrecruiters.com/{slug}/... or https://careers.smartrecruiters.com/{slug}
-#   Example slugs: LinkedIn3, ServiceNow, IFS1, CheckPointSoftwareTechnologies2
-# RECRUITEE: European/startup-focused ATS.
-#   URL format: https://{slug}.recruitee.com/api/offers/
-#   Example slugs: bunq, intermategroupgmbh, aquablu, curegroupgmbh
-#
-# WHY LIMITED BEFORE: smartrecruiters and recruitee arrays were EMPTY ([]),
-# meaning this agent wasn't scanning thousands of available tech/AI employers.
-#
-# AUTOMATION EXPLANATION (current settings are NOT too relaxed — very strict):
-#   apply_mode: DRY_RUN  -> NEVER submits applications (only prepares/evaluates)
-#   daily_cap: 5          -> Max 5 SUBMITTED applications per 24 hours
-#   per_company_cooldown_hours: 72 -> 3-day gap before applying to same company again
-#   min_fit_prob: 0.70     -> Only applies if job match probability >= 70%
-#   allowed_tiers: [strong_fit, dream_role] -> Only highest-quality matches
-#   max_free_text_questions: 0 -> REJECTS any job with even 1 free-text question
-#   first_company_confirm: True -> Requires confirmation before first submit
-#
-# TO ENABLE REAL SUBMISSIONS:
-#   1. Change apply_mode to LIVE or AUTO_EASY
-#   2. Set allowed_tiers to include good_fit if desired
-#   3. Raise max_free_text_questions to 1 or 2
-#   4. Optionally lower per_company_cooldown_hours to 24 or 48
-#
-# PRESETS (see automation_presets below):
-#   safe = current strict settings (DRY_RUN, 0.70, 72h, 5/day)
-#   balanced = 0.65 prob, 48h, 3/day, allows good_fit + 1 free-text
-#   fast = 0.60 prob, 24h, 10/day, allows moderate_fit + 2 free-text
-# ============================================
-
+models:
+  tailor:
+    provider: openai
+    model: gpt-4o
+  browser_agent:
+    provider: openai
+    model: gpt-4o
+  embeddings:
+    provider: openai
+    model: text-embedding-3-small
+  triage:
+    provider: openrouter
+    model: typesafe/jev-1.14
 candidate_preferences:
   target_role_keywords:
   - machine learning
@@ -63,51 +42,75 @@ candidate_preferences:
   - pipeline automation
   - backend
   - backend engineer
-  - data
   - data engineer
   - software engineer
   exclude_title_keywords:
+  - intern
+  - internship
+  - trainee
+  - apprentice
   - staff
   - principal
   - director
   - manager
+  - vp
+  - head of
+  - lead
   - ios
   - android
   - frontend
-  allowed_locations:
-  - anywhere
-  - bangalore
-  - bengaluru
-  - chennai
-  - delhi
-  - global
-  - gurgaon
-  - hyderabad
-  - india
-  - kolkata
-  - mumbai
-  - noida
-  - pune
-  - remote
-  - worldwide
+  - federal
+  - public sector
+  allowed_locations: []
+  max_experience_years: 6
+location_policy:
+  operator: OR
+  candidate_country: india
+  reject_countries:
+  - us
+  - canada
+  - uk
+  - eu
+  - emea
+  - europe
+  - australia
+  - latam
+  check_jd_geo_blockers: true
+  rules:
+  - name: remote_anywhere_worldwide
+    work_modes:
+    - remote
+    not_work_modes: []
+    cities: []
+    not_cities: []
+    countries: []
+    not_countries: []
+    allowed_regions:
+    - anywhere
+    - worldwide
+    - global
+    - india
+    - apac
+    allow_unspecified_remote: true
+    all_of: []
+    any_of: []
+    xor_of: []
+    not_rule: null
 ats_targets:
   greenhouse:
   - airtable
   - algolia
   - amplitude
-  - anthropic
   - apollo
   - asana
-  - Block
+  - block
   - brex
   - browserstack
   - canva
   - chargebee
-  - chronicle
   - cloudflare
   - cockroachlabs
   - coinbase
-  - coherent
   - confluent
   - coursera
   - cresta
@@ -122,7 +125,6 @@ ats_targets:
   - dropbox
   - duolingo
   - elastic
-  - envoy
   - figma
   - fivetran
   - freshworks
@@ -131,14 +133,12 @@ ats_targets:
   - gojek
   - grafana
   - grammarly
-  - gusto
   - hashicorp
   - hubspot
   - instacart
   - intercom
   - klaviyo
   - launchdarkly
-  - linear
   - loom
   - lyft
   - meesho
@@ -159,7 +159,7 @@ ats_targets:
   - robinhood
   - rubrik
   - runwayml
-  - Samsara
+  - samsara
   - scaleai
   - semgrep
   - sentry
@@ -168,33 +168,26 @@ ats_targets:
   - sourcegraph
   - squarespace
   - stripe
-  - supabase
   - temporal
   - thoughtspot
   - togetherai
   - twilio
   - udemy
-  - upstart
   - vanta
   - vercel
-  - waymo
   - weightsandbiases
   - zapier
   - zscaler
   lever:
-  - accurate
   - agnikul
   - atherenergy
-  - brightmachines
   - clevertap
-  - cohere
   - cred
   - darwinbox
   - dream11
   - fampay
   - groww
   - hasura
-  - inovonics
   - jar
   - juspay
   - khatabook
@@ -203,23 +196,18 @@ ats_targets:
   - mistral
   - netflix
   - niyo
-  - notion
   - olacabs
   - palantir
-  - Paytm
-  - plaid
+  - paytm
   - plum
-  - postman
   - practo
   - rapido
-  - roposo
   - rupeek
   - sarvam
   - shiprocket
   - slice
   - spotify
   - swiggy
-  - turvo
   - udaan
   - uniphore
   - upstox
@@ -233,7 +221,6 @@ ats_targets:
   - anthropic
   - anyscale
   - baseten
-  - buttondown
   - character
   - chroma
   - clay
@@ -246,7 +233,6 @@ ats_targets:
   - exa
   - fal
   - fireworks
-  - flock
   - harvey
   - huggingface
   - inflection
@@ -256,7 +242,6 @@ ats_targets:
   - llamaindex
   - magic
   - mem0
-  - midjourney
   - modal
   - motherduck
   - neon
@@ -272,12 +257,11 @@ ats_targets:
   - resend
   - replicate
   - roboflow
-  - Sierra
+  - sierra
   - stabilityai
-  - Statsig
+  - statsig
   - supabase
   - synthesia
-  - together
   - turso
   - unstructured
   - vapi
@@ -309,10 +293,6 @@ ats_targets:
     tenant: servicenow
     wd_instance: wd1
     site: External
-  - company: Dell
-    tenant: dell
-    wd_instance: wd1
-    site: External
   - company: Cisco
     tenant: cisco
     wd_instance: wd10
@@ -325,169 +305,72 @@ ats_targets:
     tenant: paypal
     wd_instance: wd1
     site: jobs
-  - company: Morgan Stanley
-    tenant: morganstanley
-    wd_instance: wd5
-    site: MS_Careers
-  - company: Target
-    tenant: target
-    wd_instance: wd1
-    site: targetcareers
-  - company: Walmart
-    tenant: walmart
-    wd_instance: wd5
-    site: walmartcareers
-  - company: Wells Fargo
-    tenant: wellsfargo
-    wd_instance: wd1
-    site: WellsFargoJobs
-  - company: Fidelity
-    tenant: fmr
-    wd_instance: wd1
-    site: fidelity
   - company: Autodesk
     tenant: autodesk
     wd_instance: wd1
     site: Ext
-  - company: Micron
-    tenant: micron
-    wd_instance: wd1
-    site: External
-  - company: Texas Instruments
-    tenant: ti
-    wd_instance: wd1
-    site: External
-  - company: AstraZeneca
-    tenant: astrazeneca
-    wd_instance: wd3
-    site: Careers
-  - company: Boeing
-    tenant: boeing
-    wd_instance: wd1
-    site: External
   smartrecruiters:
-  - LinkedIn3
-  - ServiceNow
-  - CheckPointSoftwareTechnologies2
-  - CommonSenseMachinesInc
-  - Versant3
-  - IFS1
-  - JobTeaser
-  - KanadeviaInova
-  - SmartRecruiters
-  - SAPITBusinessSysteme
-  - StarbucksAU
-  - TurnerTownsend
-  - AveryDennison
-  - BICS
-  - CERN
   - Visa
   - Ubisoft
-  recruitee:
-  - bunq
-  - intermategroupgmbh
-  - aquablu
-  - curegroupgmbh
-  - fauve
-  - kununu
-  - greenpeace
-  - transmetrics
-  - tacoma
-  - scoutbee
+  - CheckPointSoftwareTechnologies2
+  - SmartRecruiters
+  recruitee: []
 automation:
-  # PRESET SELECTOR: choose safe / balanced / fast
-  # This tells YOU which preset is active. The values below are what the agent reads.
-  # To switch presets: change this line, then adjust the automation values below.
-  preset: safe
-  apply_mode: DRY_RUN
-  daily_cap: 5
-  per_company_cooldown_hours: 72
-  min_fit_prob: 0.7
+  preset: fast
+  apply_mode: CONFIRM_SUBMIT
+  daily_cap: 10
+  per_company_cooldown_hours: 24
+  min_fit_prob: 0.55
+  max_scam_prob: 0.35
   allowed_tiers:
   - strong_fit
   - dream_role
-  max_free_text_questions: 0
-  first_company_confirm: true
-automation_presets:
-  description: "Select preset by setting 'preset' above to safe / balanced / fast. The values here are reference configs. Default active preset: safe."
-  safe:
-    apply_mode: DRY_RUN
-    daily_cap: 5
-    per_company_cooldown_hours: 72
-    min_fit_prob: 0.7
-    allowed_tiers:
-    - strong_fit
-    - dream_role
-    max_free_text_questions: 0
-    first_company_confirm: true
-    notes: Most restrictive. No submissions, only best tiers, 72h cooldown, 70% fit
-      threshold. Safe for evaluation.
-  balanced:
-    apply_mode: DRY_RUN
-    daily_cap: 3
-    per_company_cooldown_hours: 48
-    min_fit_prob: 0.65
-    allowed_tiers:
-    - strong_fit
-    - dream_role
-    - good_fit
-    max_free_text_questions: 1
-    first_company_confirm: true
-    notes: Relaxed. Allows good_fit tier, 48h cooldown, 65% threshold, up to 1 free-text
-      question. Good for broader scanning.
-  fast:
-    apply_mode: DRY_RUN
-    daily_cap: 10
-    per_company_cooldown_hours: 24
-    min_fit_prob: 0.6
-    allowed_tiers:
-    - strong_fit
-    - dream_role
-    - good_fit
-    - moderate_fit
-    max_free_text_questions: 2
-    first_company_confirm: false
-    notes: Aggressive scanning. Low threshold, 24h cooldown, allows moderate tiers
-      and up to 2 free-text questions. Use with caution. Toggle apply_mode to LIVE
-      for real submissions.
-
+  - moderate_fit
+  max_free_text_questions: 3
+  first_company_confirm: false
+  allowed_apply_domains: []
+  allow_headful_handoff: false
 jobboards:
   sites:
-    - naukri
-    - linkedin
-    - indeed
-    # Note: 'google' is excluded by default as Google Search blocks unproxied IP requests with 429.
+  - naukri
+  - linkedin
+  - indeed
   search_terms:
-    - "Machine Learning Engineer"
-    - "AI Engineer"
-    - "Computer Vision Engineer"
-    - "LLM Engineer"
+  - Machine Learning Engineer
+  - AI Engineer
+  - Computer Vision Engineer
+  - LLM Engineer
   locations:
-    - "Hyderabad, India"
-    - "Bengaluru, India"
-    - "India"
-    - "Remote"
+  - Remote
+  - India
   results_wanted: 20
   hours_old: 72
-
+  country_indeed: india
 gmail_scanner:
   lookback_days: 3
-  label: "professional-job_alerts"
+  label: professional-job_alerts
+  max_job_age_hours: 96
+  poll_interval_minutes: 20
   sender_keywords:
-    - linkedin
-    - naukri
-    - indeed
-    - instahyre
-    - wellfound
-    - job
-    - hiring
-    - alert
-
+  - linkedin
+  - naukri
+  - indeed
+  - instahyre
+  - wellfound
+  - job
+  - hiring
+  - alert
 ingestion:
-  prioritize_scraping: true    # Scrape JobSpy + Gmail before crawling ATS
-  scrape_only: true           # Set to true to bypass slow ATS boards completely
-  enable_jobboards: true       # Enable JobSpy multi-board search
-  enable_gmail: true           # Enable Gmail alert scanner
-  enable_ats: false             # Enable company ATS targets (Greenhouse, Lever, etc.)
-
-
+  enable_jobboards: true
+  enable_gmail: true
+  enable_ats: true
+  enable_workday: false
+  enable_remote_feeds: true
+  max_job_age_days: 7
+  triage_concurrency: 3
+  jobboards_interval_minutes: 60
+  gmail_interval_minutes: 20
+  ats_interval_minutes: 240
+  workday_interval_minutes: 720
+  prioritize_scraping: true
+  scrape_only: false
