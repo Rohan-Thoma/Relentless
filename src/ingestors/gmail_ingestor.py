@@ -18,7 +18,12 @@ from src.config import load_config
 from src.db import get_connection
 from src.ingestors.common import clean_html, insert_job, matches_basic_filters
 from src.ingestors.freshness import is_timestamp_fresh
-from src.ingestors.url_resolver import register_discovered_board, resolve_direct_apply_url
+from src.ingestors.location_policy import extract_job_location_facts
+from src.ingestors.url_resolver import (
+    extract_public_hiring_email,
+    register_discovered_board,
+    resolve_direct_apply_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,12 +130,22 @@ def mark_email_processed(
 
 
 def extract_job_links_from_email_html(html: str) -> dict:
+    """Extracts LinkedIn job IDs, direct ATS job URLs, and Naukri/Indeed/Wellfound/Instahyre URLs."""
     if not html:
-        return {"linkedin_job_ids": [], "direct_ats_urls": []}
+        return {"linkedin_job_ids": [], "direct_ats_urls": [], "other_job_urls": []}
 
     soup = BeautifulSoup(html, "html.parser")
-    linkedin_ids = []
-    direct_urls = []
+    linkedin_ids: list[str] = []
+    direct_urls: list[str] = []
+    other_job_urls: list[str] = []
+
+    other_board_re = re.compile(
+        r"https?://(?:www\.)?(?:naukri\.com/job-listings-[^\s\"'>]+|"
+        r"(?:in\.)?indeed\.com/(?:viewjob|rc/clk|pagead/clk)[^\s\"'>]+|"
+        r"wellfound\.com/jobs/[^\s\"'>]+|"
+        r"instahyre\.com/job-[^\s\"'>]+)",
+        re.IGNORECASE,
+    )
 
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
@@ -157,11 +172,67 @@ def extract_job_links_from_email_html(html: str) -> dict:
             direct = ats_match.group(0).split("?")[0]
             if direct not in direct_urls:
                 direct_urls.append(direct)
+            continue
+
+        ob_match = other_board_re.search(href)
+        if ob_match:
+            clean_ob = ob_match.group(0)
+            if clean_ob not in other_job_urls:
+                other_job_urls.append(clean_ob)
 
     return {
         "linkedin_job_ids": linkedin_ids,
         "direct_ats_urls": direct_urls,
+        "other_job_urls": other_job_urls,
     }
+
+
+async def fetch_direct_ats_job(client: httpx.AsyncClient, ats_url: str) -> dict | None:
+    """Fetches a specific direct Greenhouse/Lever job posting found in an alert email."""
+    # Greenhouse: https://boards.greenhouse.io/{board}/jobs/{job_id}
+    gh = re.search(r"https?://(?:boards|job-boards)\.greenhouse\.io/([^/]+)/jobs/(\d+)", ats_url)
+    if gh:
+        board, jid = gh.group(1), gh.group(2)
+        try:
+            r = await client.get(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{jid}", timeout=10.0)
+            if r.status_code == 200:
+                d = r.json()
+                loc_obj = d.get("location")
+                loc = loc_obj.get("name", "") if isinstance(loc_obj, dict) else ""
+                return {
+                    "company": board.capitalize(),
+                    "title": d.get("title", ""),
+                    "location": loc,
+                    "jd_text": clean_html(d.get("content", "")),
+                    "apply_url": d.get("absolute_url") or ats_url,
+                    "external_job_id": jid,
+                }
+        except Exception as e:
+            logger.debug("Direct Greenhouse job fetch failed for %s: %s", ats_url, e)
+        return None
+
+    # Lever: https://jobs.lever.co/{site}/{uuid}
+    lv = re.search(r"https?://jobs\.lever\.co/([^/]+)/([a-f0-9-]{8,})", ats_url, re.IGNORECASE)
+    if lv:
+        site, jid = lv.group(1), lv.group(2)
+        try:
+            r = await client.get(f"https://api.lever.co/v0/postings/{site}/{jid}?mode=json", timeout=10.0)
+            if r.status_code == 200:
+                d = r.json()
+                cats = d.get("categories") or {}
+                wp = d.get("workplaceType") or ""
+                loc = ", ".join(filter(None, [cats.get("location", ""), wp]))
+                return {
+                    "company": site.capitalize(),
+                    "title": d.get("text", ""),
+                    "location": loc,
+                    "jd_text": d.get("descriptionPlain", ""),
+                    "apply_url": d.get("hostedUrl") or ats_url,
+                    "external_job_id": jid,
+                }
+        except Exception as e:
+            logger.debug("Direct Lever job fetch failed for %s: %s", ats_url, e)
+    return None
 
 
 async def fetch_linkedin_guest_job(
@@ -562,9 +633,35 @@ async def poll_gmail_alerts(
             )
             mail_extracted_jobs = 0
 
-            # 1. Register any direct ATS boards found in the email
+            # 1. Register AND directly ingest any Greenhouse/Lever ATS job URLs found in the email
+            ats_extracted_jobs = 0
             for ats_url in ats_urls:
                 await asyncio.to_thread(register_discovered_board, ats_url)
+                direct_job = await fetch_direct_ats_job(client, ats_url)
+                if direct_job and direct_job.get("title"):
+                    if matches_basic_filters(
+                        direct_job["title"], direct_job["location"], jd_text=direct_job["jd_text"]
+                    ):
+                        facts = extract_job_location_facts(
+                            direct_job["title"], direct_job["location"], direct_job["jd_text"]
+                        )
+                        email_hint = extract_public_hiring_email(direct_job["jd_text"])
+                        ins = await asyncio.to_thread(
+                            insert_job,
+                            None,
+                            "gmail_ats_direct",
+                            direct_job["company"],
+                            direct_job["title"],
+                            direct_job["location"],
+                            direct_job["apply_url"],
+                            direct_job["jd_text"],
+                            original_source_url=ats_url,
+                            work_mode=facts.work_mode,
+                            external_job_id=direct_job.get("external_job_id"),
+                            hiring_contact_email=email_hint,
+                        )
+                        if ins:
+                            ats_extracted_jobs += 1
 
             # 2. Fetch LinkedIn guest jobs concurrently with semaphore
             async def _process_li_id(li_id: str) -> bool:
@@ -589,7 +686,9 @@ async def poll_gmail_alerts(
                 if "linkedin.com" in apply_url.lower():
                     apply_url = await resolve_direct_apply_url(client, company, title, fallback_url=apply_url)
 
-                if matches_basic_filters(title, location):
+                if matches_basic_filters(title, location, jd_text=jd_text):
+                    facts = extract_job_location_facts(title, location, jd_text)
+                    email_hint = extract_public_hiring_email(jd_text)
                     inserted = await asyncio.to_thread(
                         insert_job,
                         None,
@@ -600,12 +699,15 @@ async def poll_gmail_alerts(
                         apply_url,
                         jd_text,
                         original_source_url=linkedin_fallback,
+                        work_mode=facts.work_mode,
+                        external_job_id=li_id,
+                        hiring_contact_email=email_hint,
                     )
                     return bool(inserted)
                 return False
 
             results = await asyncio.gather(*[_process_li_id(lid) for lid in li_ids])
-            mail_extracted_jobs = sum(1 for r in results if r)
+            mail_extracted_jobs = ats_extracted_jobs + sum(1 for r in results if r)
             total_extracted += mail_extracted_jobs
 
             await asyncio.to_thread(mark_email_processed, msg_id, subject, sender, mail_extracted_jobs)
