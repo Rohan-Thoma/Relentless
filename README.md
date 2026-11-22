@@ -1,280 +1,246 @@
 <p align="center">
-  <img src="web/logos/1_Relentless_logo_gradient_lime.png" alt="Relentless Logo" width="210" />
+  <img src="web/logos/1_Relentless_logo_gradient_lime.png" alt="Relentless Logo" width="190" />
 </p>
 
 <h1 align="center">RELENTLESS</h1>
 
 <p align="center">
-  <strong>Autonomous Multi-Source Job Discovery, System-1 AI Triage, Zero-Hallucination Resume Tailoring &amp; Human-in-the-Loop Command Center</strong>
+  <strong>An open-source, 24/7 personal job-hunting agent.</strong>
 </p>
 
 <p align="center">
-  <code>Python 3.11+</code> &bull;
-  <code>PostgreSQL (Neon)</code> &bull;
-  <code>OpenRouter / TypeSafe Jev</code> &bull;
-  <code>OpenAI + Typst PDF</code> &bull;
-  <code>Playwright</code> &bull;
-  <code>Zero-Dependency Web HUD</code> &bull;
-  <code>Telegram Bot</code>
+  Finds fresh, high-fit roles across 237+ company career sites &amp; job boards, filters out ghost jobs, builds honest ATS-tailored resume PDFs, and keeps <strong>you</strong> in 100% control — for <strong>less than &#36;5/month</strong>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Rohan-Thoma/Relentless/stargazers"><img src="https://img.shields.io/github/stars/Rohan-Thoma/Relentless?style=for-the-badge&color=a8ff00&labelColor=0d1118" alt="GitHub Stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-c084fc?style=for-the-badge&labelColor=0d1118" alt="MIT License" /></a>
+  <a href="https://github.com/Rohan-Thoma/Relentless/actions"><img src="https://img.shields.io/github/actions/workflow/status/Rohan-Thoma/Relentless/ci.yml?style=for-the-badge&label=CI&labelColor=0d1118" alt="CI Status" /></a>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-a8ff00?style=for-the-badge&labelColor=0d1118" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/AI_Cost-%3C%245%2Fmonth-c084fc?style=for-the-badge&labelColor=0d1118" alt="AI Cost Under $5/month" />
+</p>
+
+<p align="center">
+  <a href="#-5-minute-quick-start"><strong>Quick Start</strong></a> &bull;
+  <a href="#-why-relentless"><strong>Why Relentless</strong></a> &bull;
+  <a href="#-monthly-cost-breakdown"><strong>Cost Math</strong></a> &bull;
+  <a href="#-see-it-in-action"><strong>Screenshots</strong></a> &bull;
+  <a href="docs/SETUP_GUIDE.md"><strong>Setup Guide</strong></a> &bull;
+  <a href="docs/USER_GUIDE.md"><strong>User Guide</strong></a>
 </p>
 
 ---
 
-## Why Relentless?
-
-Job searching breaks down at three points: discovering fresh postings across dozens of ATS portals before they saturate, separating real engineering roles from ghost jobs and spam, and tailoring an ATS-clean resume without fabricating experience.
-
-**Relentless** automates the grind while keeping **you** strictly in control of every submission:
-
-1. **Multi-Source Discovery & SHA-256 Deduplication** — Polls Greenhouse, Lever, Ashby, Workday CXS, SmartRecruiters, Recruitee, JobSpy boards (LinkedIn / Indeed / Naukri), and optional Gmail job alert labels directly into PostgreSQL.
-2. **System-1 AI Triage (`Jev`)** — Evaluates scam/ghost-job risk, fit tier (`dream_role` to `reject`), calibrated fit probability, and target resume persona using your private Candidate Master Profile and learned OKF knowledge rules.
-3. **Zero-Hallucination Tailored Resume PDFs (`System-2 + Typst`)** — Generates tailored bullets anchored exclusively in your verified roles, verifies zero fabrication via a second Jev hallucination pass, and renders an ATS-ready PDF named for you.
-4. **Human-in-the-Loop Safety Gate** — Prepares Playwright ATS pre-checks with form screenshots and pauses before final submission (`DRY_RUN` or `AUTO_CONFIRM`). Nothing ever submits without your explicit approval via the **Web Command Center** or **Telegram**.
-5. **Continuous Learning (`OKF Brain` + `Eval Harness`)** — Distills your approvals, rejections, and callbacks into queryable Markdown knowledge graphs and measures Precision@K, 95% Wilson confidence intervals, and Brier calibration scores.
-6. **Built-In Diagnostics & Live Logs** — Inspect system readiness, missing environment variables, and secret-redacted server logs anytime from **`07 // LOGS & DIAG`** in the Web UI or **`/logs`** in Telegram.
+<!-- SCREENSHOT PLACEHOLDER 1: Capture full-screen 01 // MISSION CONTROL (AMOLED dark UI with KPI cards + priority matches) and save as docs/images/hero-command-center.png -->
+<p align="center">
+  <img src="docs/images/hero-command-center.png" alt="Relentless Web Command Center — 01 // Mission Control" width="100%" />
+</p>
+<p align="center">
+  <sub><em>The Relentless AMOLED Command Center: live job discovery funnel, match scores, resume studio, and knowledge brain synced 1:1 with Telegram.</em></sub>
+</p>
 
 ---
 
-## Architecture Overview
+## 🔥 Why Relentless?
 
-```text
-  ATS Boards (Greenhouse/Lever/Ashby/Workday/SmartRecruiters/Recruitee)
-+ JobSpy (LinkedIn / Indeed / Naukri) + Gmail Alert Scanner
-                         │
-                         ▼ (SHA-256 Deduplicated)
-                 PostgreSQL (Neon) ◄──── App Settings & Master Profile (DB-synced)
-                         │
-                         ▼
-         System-1 Jev Triage (OpenRouter / TypeSafe)
-         ├── Scam Gate + Cosine Baseline + Calibrated Fit Score
-         └── OKF Knowledge Graph Context
-                         │
-          ┌──────────────┴──────────────┐
-          ▼                             ▼
-   Web Command Center              Telegram HITL Bot
-   (01–08 HUD + Auth Gate)         (/digest, /status, /logs, Inline Buttons)
-          │                             │
-          └──────────────┬──────────────┘
-                         ▼
-      System-2 Tailor (OpenAI + Typst) ──▶ Playwright Pre-Check ──▶ Human Confirm & Apply
-```
+Big tech is racing to build always-on personal agents like **Meta Muse** and **OpenAI Dots** that live in your chat apps and learn how you work. **Relentless brings that same 24/7 personal agent experience exclusively to your job hunt** — open-source, self-hosted, and built for real daily use instead of draining your wallet.
+
+Most paid "AI job hunting" SaaS platforms charge **\$30–\$99/month**, burn through your credits fast, invent fake resume bullets to inflate scores, and pretend to "auto-apply to 1,000 jobs while you sleep" — right into CAPTCHAs, broken forms, and spam filters. Meanwhile, LinkedIn Premium costs **~\$30–\$40/month** and still leaves you grinding manually.
+
+**Relentless flips the model — consumer-first, not monetization-first:**
+
+| Feature | **Relentless (Open Source)** | Paid "AI Auto-Apply" SaaS | LinkedIn Premium | Manual Grinding |
+| --- | --- | --- | --- | --- |
+| **Monthly Cost** | **< \$5/mo** *(usually < \$1 in AI tokens!)* | \$30 – \$99/mo + credit walls | ~\$30 – \$40/mo | Free *(costs your evenings)* |
+| **Runs 24/7 & Learns With You** | Yes — learns your taste + market trends | Static filters or black-box feeds | Basic job alerts | No |
+| **Resume Tailoring** | **Zero-hallucination** PDF + ATS scorecard + instant `#id` edits | Generic rewrites or risky fabrication | None | Slow manual editing |
+| **Blocked Pages (CAPTCHAs / Logins)** | **Honest escalation** — screenshots the blocker & hands you PDF + direct link | Fails silently or burns credits retrying | N/A | You hit the wall yourself |
+| **Who Decides Every Step?** | **100% You** (Telegram + Web HUD) | Blind bulk spam | You | You |
+| **Ownership & Privacy** | **MIT Open Source** — your DB, your keys, zero lock-in | Vendor lock-in + monthly billing | Platform lock-in | N/A |
 
 ---
 
-## Prerequisites & Accounts Checklist
+## 🛡️ Honest Automation (Offloads the Grind, Never Fakes Autonomy)
 
-Before deploying or running locally, gather the API keys below. **Every secret stays in `.env` or your host environment variables — never commit keys or `config/master_profile.json` to Git.**
+Relentless does **not** make wild sci-fi promises it cannot keep. It knows where browser automation stops — and puts you in the driver's seat right where human judgment wins interviews:
 
-| Variable | Required? | Purpose | Where to Get It |
+1. **Relentless does the exhausting 90% 24/7:**
+   - Polls curated, deduplicated **direct company ATS boards** (Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee — with HTTP `ETag`/`304`, 3x-404 auto-pruning, and exponential backoff), public remote feeds (Remotive, Arbeitnow), optional bounded Workday CXS (opt-in), watermarked multi-board search via JobSpy (LinkedIn, Indeed, Naukri, Glassdoor with native `is_remote`), and label-only Gmail job alerts (including Naukri/Indeed/Wellfound/Instahyre & direct Greenhouse/Lever link ingestion).
+   - Enforces a **composable `OR` / `AND` / `XOR` / `NOT` Location Policy** (default: strict Remote-only anywhere/worldwide — never conflating hybrid/APAC with remote or US Indiana `IN` with India, and checking JD text for foreign work-authorization or 5-day-onsite blockers).
+   - Deduplicates reposted listings across a 30-day rolling window + **`pgvector` semantic similarity**, kills ghost jobs and scam traps via **`TriageGraph`**, and notifies you only on strong matches.
+2. **You decide every application & surgical resume tweak:**
+   - Tap **Interested** in Telegram or the Web Studio to run **`TailorGraph`** (LangGraph cyclic refinement): passes the **full untruncated JD** to your chosen OpenAI/OpenRouter model (default `gpt-4o`), preserves quantified metrics & multi-page depth (1–3 pages, zero 1-page cramming), transparently tags verified vs. adjacent ecosystem bridges vs. unverified stretch terms, verifies via a fail-loud Jev credibility audit, and computes a **100% honest, un-clamped ATS scorecard** strictly over rendered PDF text + semantic similarity.
+   - Want to emphasize a specific project or add a tool? Reply directly in Telegram (`#42 highlight PyTorch inference latency and add Redis`) or use the Web Studio prompt box. Your instruction is executed immediately, and the OKF Brain distills the **meta-intent (WHY)** into generalizable tailoring principles.
+   - Skipping a job? Choose a structured skip reason (**Experience Mismatch**, **Wrong Stack**, **Wrong Location**, **Expired / Closed**, **Scam**, or **Custom Note**). An **Intelligent Learning Gate** automatically excludes expired links and busy days so they never pollute OKF Brain or calibration.
+3. **Radical honesty on blocked pages (Interactive Human Gate Handoff):**
+   - **`ApplyAgentGraph`** fast-skips known login-walled portals (`linkedin.com`, `naukri.com`, `indeed.com`, `myworkdayjobs.com`) without wasting Chromium cycles, ignores site-wide navigation/search bars, enforces `max_free_text_questions`, dismisses cookie popups, pre-fills your details, attaches your tailored PDF, and captures step-by-step screenshots.
+   - If a portal throws a **CAPTCHA / Cloudflare challenge**, requires a **password login**, or exceeds your essay cap, Relentless pauses cleanly at an **Interactive Human Gate** (never attempting CAPTCHA bypasses), shows you the live screenshot + exact blocker reason, and gives you the tailored PDF + direct link (plus a 3-stage Direct Career Resolver for aggregator links).
+   - **Nothing ever submits without your explicit click.** Starts in `PREPARE_ONLY` mode by default (`MANUAL_ONLY`, `PREPARE_ONLY`, `CONFIRM_SUBMIT`), with daily caps, per-company cooldowns (`72h` default), and single-use SHA-256-locked confirmation tokens.
+
+---
+
+## 💸 Monthly Cost Breakdown
+
+**Runs 24/7 for under \$5/month — here's the exact math.** Relentless pairs specialized decision models (`typesafe/jev-1.14`) and low-cost embeddings (`text-embedding-3-small`) with flexible model selection (**OpenAI** or **OpenRouter**) directly from the Web UI model picker.
+
+| Pipeline Stage | Engine / Model | Typical Monthly Volume *(~100 jobs/day, 10 tailored/day)* | Est. Monthly Cost |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | **Required** | Primary PostgreSQL storage (jobs, settings, knowledge, audit logs) | [Neon](https://neon.tech) |
-| `OPENROUTER_API_KEY` | **Required** *(unless `TYPESAFE_API_KEY` is set)* | System-1 Jev AI Triage & Hallucination Audit | [OpenRouter Keys](https://openrouter.ai/keys) |
-| `WEB_API_KEY` | **Required for Cloud/Remote** | Full-screen Web Command Center login password & API key | Generate locally (command below) |
-| `OPENAI_API_KEY` | Recommended | Surgical Resume Tailor (`.pdf` generation) & LLM form fallback | [OpenAI API Keys](https://platform.openai.com/api-keys) |
-| `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID` | Recommended | Instant Telegram digests, inline approvals, alerts & `/logs` | `@BotFather` & `@userinfobot` |
-| `GMAIL_ADDRESS` & `GMAIL_APP_PASSWORD` | Optional | Scan Gmail job alert emails via IMAP | Google Account App Passwords |
-| `TYPESAFE_API_KEY` | Optional | Direct TypeSafe `/v1/systemone` endpoint instead of OpenRouter | TypeSafe |
+| **24/7 Job Discovery & Watermarked Polling** | Python + Direct ATS (`ETag`/304) + JobSpy + Label-Only Gmail | ~3,000+ listings scanned & deduplicated | **\$0.00** |
+| **Semantic Embeddings (`pgvector`)** | `text-embedding-3-small` *(switchable via UI)* | ~3,000 JDs + OKF RAG queries | **~\$0.05/mo** |
+| **Ghost-Job Filtering & Fit Scoring** | **TypeSafe Jev** (`typesafe/jev-1.14` on OpenRouter: ~\$0.042/1M input tokens, \$0 output) | ~3,000 jobs/mo (~1,500 input tokens each) | **~\$0.19/mo** |
+| **Resume Tailoring + Credibility Audit** | `gpt-4o` *(default — switchable to `gpt-4.1`, `gpt-4.1-mini`, Claude, Gemini via UI)* + Jev Audit + Local Typst PDF | ~150–300 tailored PDFs/mo | **~\$1.20–\$2.50/mo** *(or ~\$0.25/mo on `gpt-4.1-mini`)* |
+| **Vision + DOM Form Pre-Fill** | `gpt-4o` *(switchable via UI)* + Playwright | ~150 forms/mo | **~\$0.40/mo** |
+| **Continuous Learning, Calibration & ATS Scorer** | **Google Cloud OKF** + Local Python / LOOCV PAVA + Experiments | Unlimited learning & A/B tracking | **\$0.00** |
+| **Database, Notifications & Local Hosting** | Neon Postgres (`pgvector`, Free Tier) + Telegram Bot + Local/VPS | 24/7 persistence & alerts | **\$0.00** *(or ~\$5/mo optional Railway cloud)* |
+| **Total AI API Bill** | **All models combined** | **Full daily job search** | **~\$2–\$3/mo** *(or < \$1/mo with mini models)* |
+
+> Even if you tailor dozens of resumes a day **and** host in the cloud on Railway, your total bill stays cheaper than a single month of LinkedIn Premium — with **zero artificial credit limits**.
 
 ---
 
-## Step-by-Step: How to Obtain Every Key
+## 📸 See It in Action
 
-### 1. `DATABASE_URL` (Free Neon PostgreSQL)
-1. Create a free account at [neon.tech](https://neon.tech) and click **New Project**.
-2. Open your project dashboard -> **Connection Details**.
-3. Copy the PostgreSQL connection string (`postgresql://USER:PASSWORD@ep-....aws.neon.tech/neondb?sslmode=require`).
-4. Set `DATABASE_URL` to that string. *(Optional: you can also paste the `-pooler` hostname URI into `DATABASE_URL_POOLER` for pooled queries, and Neon keeps `DATABASE_URL` for advisory locks/migrations.)*
+### 1. Your Pocket Job Agent in Telegram
+Get instant scored job cards on your phone, tap once to tailor your resume and pre-check the employer form, review the **Before → After ATS Match Scorecard**, tweak bullets by replying (`#42 emphasize FastAPI + Docker`), and approve or log applications from anywhere.
 
-### 2. `OPENROUTER_API_KEY` (AI Triage Brain)
-1. Sign up at [openrouter.ai](https://openrouter.ai).
-2. Add a small credit balance under **Credits** (System-1 Jev Decisions uses fractions of a cent per job).
-3. Go to **Keys** -> **Create Key**, copy the `sk-or-v1-...` token, and set `OPENROUTER_API_KEY`.
-   - *(Alternative: if you have a direct TypeSafe key, set `TYPESAFE_API_KEY` instead — Relentless routes triage cleanly to whichever key is configured.)*
+<!-- SCREENSHOT PLACEHOLDER 2: Side-by-side or stitched screenshot of Telegram: (Left) Scored Job Card with Fit/Scam % + buttons, (Right) Tailored Package with Form Preview Screenshot + PDF + ATS Scorecard + Auto-Submit / Request Changes buttons -->
+<p align="center">
+  <img src="docs/images/telegram-agent-flow.png" alt="Relentless Telegram Pocket Agent — Match Card and Tailored Application Package" width="92%" />
+</p>
 
-### 3. `WEB_API_KEY` (Web UI Security Gate)
-Protect your Web Command Center before exposing it on the internet. Generate a strong cryptographic key:
+### 2. Web Application Studio (`03 // APPLICATION STUDIO`)
+Inspect everything in one zero-distraction screen: Before/After ATS score boost, matched & missing JD keywords, full job description, live rendered Typst PDF, Playwright pre-filled form screenshots, and a surgical revision prompt box.
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+<!-- SCREENSHOT PLACEHOLDER 3: Capture 03 // APPLICATION STUDIO showing Scorecard & Diff on left, Tailored PDF / Playwright Screenshot on right, and Surgical Revision Prompt -->
+<p align="center">
+  <img src="docs/images/application-studio.png" alt="Relentless Application Studio — ATS Scorecard, Tailored PDF & Playwright Evidence" width="100%" />
+</p>
+
+### 3. Honest Blocker Alerts (`CAPTCHA / Login Wall`)
+When an application site requires a login or blocks bots with a CAPTCHA, Relentless never fakes a submission. It flags the exact blocker, attaches the screenshot, and gives you your ready-to-upload PDF + direct application URL.
+
+<!-- SCREENSHOT PLACEHOLDER 4: Capture either Telegram blocker message or Studio Playwright escalation screenshot showing CAPTCHA / Login Wall detected + Direct Apply Link -->
+<p align="center">
+  <img src="docs/images/blocker-escalation.png" alt="Relentless Blocker Escalation — Clear Screenshot and Direct Manual Apply Link" width="92%" />
+</p>
+
+### 4. Self-Learning Career & Market Brain (`04 // OKF BRAIN`)
+Built on **Google Cloud's Open Knowledge Format (OKF)**, Relentless turns every job you approve, skip, or flag — plus live market trends across incoming postings (in-demand skills, company hiring velocity, remote/city shifts) — into an interactive Obsidian-style knowledge graph that sharpens future matches automatically.
+
+<!-- SCREENSHOT PLACEHOLDER 5: Capture 04 // OKF BRAIN in Obsidian Graph View showing lime (human-reviewed) & purple (machine-confirmed) nodes + Node Inspector -->
+<p align="center">
+  <img src="docs/images/okf-knowledge-graph.png" alt="Relentless OKF Knowledge Brain — Interactive Obsidian Graph View" width="100%" />
+</p>
+
+### 5. Pipeline Kanban & Calibration Lab (`02 // PIPELINE` & `05 // ML CALIBRATION`)
+Track every opportunity from `UNREVIEWED` → `READY_FOR_REVIEW` → `APPLIED` → `CALLBACK`, and verify that AI ranking measurably outperforms simple keyword matching using live `Precision@K` and calibration telemetry.
+
+<!-- SCREENSHOT PLACEHOLDER 6: Capture 02 // JOBS PIPELINE (Kanban view) or 05 // ML CALIBRATION (Precision@K & Brier Skill charts) -->
+<p align="center">
+  <img src="docs/images/pipeline-and-eval.png" alt="Relentless Jobs Pipeline and Calibration Metrics" width="100%" />
+</p>
+
+---
+
+## ⚙️ Under the Hood: SOTA Tech Without the Bloat
+
+```mermaid
+flowchart TD
+    A["Watermarked Discovery: Curated ATS Boards + JobSpy + Label-Only Gmail"] --> B["Composable LocationPolicy (OR/AND/XOR) + 30d/pgvector Semantic Dedupe"]
+    B --> C["LangGraph TriageGraph: Embed -> OKF RAG -> Jev -> Calibrate (Rank-Only)"]
+    C --> D{"Meets Raw Fit & Scam Gate?"}
+    D -- "No" --> E["Filtered Out Quietly"]
+    D -- "Yes" --> F["Telegram Rich Card & Web Command Center"]
+    F --> G["Human: Tailor / #id Edit / Structured Skip Reason"]
+    G --> H["LangGraph TailorGraph: Full JD -> Cyclic Refine -> Fail-Loud Jev Audit -> Multi-Page Typst PDF"]
+    H --> I["Honest ATS Scorecard + LangGraph ApplyAgentGraph (Vision+DOM Pre-Check)"]
+    I --> J{"Direct Form Ready?"}
+    J -- "Aggregator / CAPTCHA / Login" --> K["Interactive Human Gate: Screenshot + PDF + Direct Career Link"]
+    J -- "Yes" --> L["1-Tap Confirm -> Safe Submit (CONFIRM_SUBMIT + SHA-256 Token)"]
+    K --> M["Learning Gate -> OKF Brain, Experiments & LOOCV PAVA Calibration"]
+    L --> M
 ```
 
-*(Works identically on Linux, macOS, and Windows PowerShell!)*
-- Set `WEB_API_KEY` to the output string.
-- Whenever you visit your Railway or self-hosted Web URL from a browser, Relentless shows a full-screen **Security Gate**. Paste this `WEB_API_KEY`, click **UNLOCK COMMAND CENTER**, and your browser stores an `HttpOnly`, `SameSite=Lax` HMAC-SHA256 session cookie (`5` failed login attempts lock out the IP for `15` minutes).
-- *(Optional)* Set `WEB_SESSION_SECRET` to a second separate secret if you want cookie signing independent of `WEB_API_KEY`.
-
-### 4. `OPENAI_API_KEY` (Resume Tailoring & PDF Synthesis)
-1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
-2. Click **Create new secret key** (`sk-proj-...`) with billing enabled.
-3. Set `OPENAI_API_KEY`.
-   - Without it, discovery, triage, Telegram alerts, and the Web UI still run normally — clicking **Tailor Resume** will fail explicitly and log why until you add `OPENAI_API_KEY`.
-
-### 5. `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID` (Mobile HITL & `/logs`)
-1. Open Telegram and start a chat with **[@BotFather](https://t.me/BotFather)**.
-2. Send `/newbot`, choose a display name and username (ending in `bot`), and copy the HTTP API token (`123456789:AA...`) into `TELEGRAM_BOT_TOKEN`.
-3. **Important:** Open a chat with your newly created bot and press **Start** (or send `hello`), otherwise Telegram bots cannot message you first.
-4. Get your numeric `TELEGRAM_CHAT_ID`:
-   - Message **[@userinfobot](https://t.me/userinfobot)** on Telegram and copy your numeric **Id**, OR
-   - Leave `TELEGRAM_CHAT_ID` blank during local `python manage.py setup` and Relentless will auto-detect it after you message your bot!
-
-### 6. `GMAIL_ADDRESS` & `GMAIL_APP_PASSWORD` (Optional Job Alert Scanner)
-Only needed if you want Relentless to ingest job alert emails:
-1. Enable **2-Step Verification** on your Google Account (`myaccount.google.com/security`).
-2. Search for **App passwords**, create one named `Relentless`, and copy the 16-character passcode into `GMAIL_APP_PASSWORD`.
-3. Set `GMAIL_ADDRESS` to your Gmail address.
-4. In Gmail, create a filter that applies your configured label (default: `professional-job_alerts`) to job alert emails, OR change `gmail_scanner.label` in **`06 // CONFIG & VAULT`**.
-5. If you don't want Gmail scanning, disable **Enable Gmail Alerts Scanner** in **`06 // CONFIG & VAULT`** -> **Engine & Discovery Config**.
+| Component | Technology | Why It Matters to You |
+| --- | --- | --- |
+| **LangGraph AI Spine** | **`TriageGraph`**, **`TailorGraph`**, **`ApplyAgentGraph`** (`PostgresSaver`) | Every AI workflow runs as a stateful, checkpointed graph with cyclic self-refinement and Interactive Human Gate interrupts. |
+| **Flexible Model Picker** | **OpenAI** (`gpt-4o`, `gpt-4.1`, `text-embedding-3-small`) & **OpenRouter** (`typesafe/jev-1.14`, Claude, Gemini, DeepSeek) | Switch chat, vision browser, embedding, and triage models live from `06 // CONFIG & VAULT` or `config/config.yaml` with zero code edits. |
+| **Composable Location Policy** | **`LocationPolicy` Engine** (`OR` / `AND` / `XOR` / `NOT` + JD Blocker Scanner) | Strictly enforces Remote-only (default) or any city/hybrid/onsite rule combination with a live Dry-Tester in the Web UI. |
+| **Continual Memory** | **Google Cloud Open Knowledge Format (OKF)** + **`pgvector` Semantic RAG** | Retrieves top-K relevant career insights semantically per job, learns meta-intent behind resume edits, and filters out expired-link skips via an Intelligent Learning Gate. |
+| **Depth-Preserving ATS Engine** | `gpt-4o` (default) + **Multi-Page Typst** + **Honest ATS Scorecard** | Passes full untruncated JDs, preserves verified metrics & core skills, tags 3-tier skill provenance, and scores strictly over rendered PDF text (zero artificial score clamping). |
+| **Honest Browser Agent** | **Playwright** + Vision/DOM Navigation + **Human Gate Handoff** | Fast-skips login-walled portals, ignores header/nav search bars, enforces `max_free_text_questions`, and hands off CAPTCHAs/logins transparently with screenshots. |
+| **Calibration & Experiments** | **LOOCV-Validated PAVA Calibration** (`calibration_models`) + **`experiments`** | Persists calibration strictly for ranking priority (zero filtering death spirals) and tracks before/after Precision@K & Brier lift on every config change. |
 
 ---
 
-## Deployment Options (Pick One)
+## ⚡ 5-Minute Quick Start
 
-### Option A — Railway Direct (Recommended: 1 Service, Zero Proxy Credit Burn)
+You only need **4 things** to launch (zero paid SaaS subscriptions required):
+1. Free **PostgreSQL database** from [Neon](https://neon.tech) (`DATABASE_URL`)
+2. **OpenRouter API key** from [openrouter.ai/keys](https://openrouter.ai/keys) (`OPENROUTER_API_KEY` — \$1–\$5 credit lasts months)
+3. **OpenAI API key** from [platform.openai.com/api-keys](https://platform.openai.com/api-keys) (`OPENAI_API_KEY` — for PDF tailoring & form fill)
+4. *(Recommended)* Free **Telegram Bot** from `@BotFather` + a strong `WEB_API_KEY` login password
 
-> **Why Railway Direct?** Relentless serves its static Web UI, secure login gate, REST API, Playwright automation, background scrapers, and Telegram bot from one container (`python manage.py run`). You don't need Netlify, Vercel, or any extra paid proxy!
+### Option A — 1-Service Cloud Deploy (Railway Direct)
+1. **Fork** [Rohan-Thoma/Relentless](https://github.com/Rohan-Thoma/Relentless) on GitHub.
+2. On [Railway](https://railway.app), click **New Project -> Deploy from GitHub repo** and choose your fork (uses the included `railway.json` & `Dockerfile`).
+3. Add `DATABASE_URL`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `WEB_API_KEY`, and optionally `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` under **Variables**.
+4. Generate a public domain under **Settings -> Networking**, visit your URL, unlock with `WEB_API_KEY`, and complete your profile visually in **`06 // CONFIG & VAULT`** — **zero CLI needed!**
 
-1. **Fork** this repository to your own GitHub account.
-2. Create a new project on [Railway](https://railway.app) -> **Deploy from GitHub repo** -> pick your fork.
-   - Railway detects `railway.json` and builds using the included `Dockerfile` (`python:3.11-slim` + Playwright Chromium).
-3. In Railway -> **Variables**, add:
-   - `DATABASE_URL`
-   - `OPENROUTER_API_KEY`
-   - `WEB_API_KEY`
-   - `OPENAI_API_KEY` *(recommended)*
-   - `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID` *(recommended)*
-   - *(Optional)* `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `POLL_INTERVAL_HOURS=1.0`
-4. Open Railway **Settings -> Networking -> Generate Domain** (creates `https://<your-app>.up.railway.app`).
-5. Visit `https://<your-app>.up.railway.app`:
-   - Enter your `WEB_API_KEY` on the full-screen **Security Gate** to sign in.
-   - If this is a fresh install, you will see the **First-Run Onboarding Banner** prompting you to complete your **Candidate Master Profile** right inside **`06 // CONFIG & VAULT`** — **no local CLI required!**
-
-### Option B — Private Netlify Frontend + Railway Backend (Split Edge Proxy)
-
-Use this option only if you want your UI gated behind a Netlify Private Site / Password / SSO layer.
-
-> **Netlify Free Credit Warning:** Netlify's free plan deducts build/deploy credits per production deploy (~15 credits/deploy on the usage dashboard). If Netlify auto-builds on every push, frequent commits can burn monthly credits quickly. Prefer **Option A (Railway Direct)** or pause Netlify auto-publishing while iterating!
-
-1. Deploy the backend on **Railway** (same steps 1–4 as Option A).
-   - Set `WEB_API_KEY` on Railway.
-   - Set `WEB_CORS_ORIGIN` on Railway to your Netlify origin (`https://your-site.netlify.app`), or leave `*`.
-2. Create a Netlify site from your fork with these **Build settings** (`netlify.toml` handles edge routing automatically):
-   - **Base directory:** `/`
-   - **Build command:** *(leave empty)*
-   - **Publish directory:** `web`
-   - **Functions directory:** *(leave empty / default — do NOT point to `api/api_proxy`; the Edge Function lives in `netlify/edge-functions/api_proxy.ts`)*
-3. In Netlify -> **Environment variables**, set **both**:
-   - `RELENTLESS_BACKEND_URL` = `https://<your-app>.up.railway.app` *(exact Railway public URL)*
-   - `WEB_API_KEY` = *(same `WEB_API_KEY` as Railway — injected server-side into `X-Relentless-Api-Key`)*
-4. Deploy Netlify. Note that `api_proxy.ts` **fails loudly** (`HTTP 500 RELENTLESS_BACKEND_URL_MISSING`) if `RELENTLESS_BACKEND_URL` is omitted.
-
-### Option C — Local Machine / Self-Hosted Server
-
-Works on **Linux, macOS, and Windows** (strictly OS-independent Python):
+### Option B — Run Locally (Linux, macOS, Windows — \$0 Hosting)
 
 ```bash
-# 1. Clone your fork
-git clone https://github.com/<your-username>/Relentless.git
+git clone https://github.com/Rohan-Thoma/Relentless.git
 cd Relentless
 
-# 2. Create and activate a virtual environment
 python -m venv .venv
 # Linux / macOS:
 source .venv/bin/activate
 # Windows PowerShell:
 # .\.venv\Scripts\Activate.ps1
 
-# 3. Install dependencies & Chromium for Playwright
 pip install -r requirements.txt
 playwright install chromium
 
-# 4. Run the interactive onboarding wizard (creates .env, initializes Neon DB,
-#    auto-generates WEB_API_KEY, auto-detects TELEGRAM_CHAT_ID, and personalizes profile)
+# Interactive wizard: creates .env, sets up Neon DB, auto-detects Telegram ID & builds starter profile
 python manage.py setup
 
-# 5. Verify system readiness & connectivity
+# Verify connectivity & readiness
 python manage.py doctor
 
-# 6. Start the unified platform (Web UI + API + Telegram Bot + Background Pipeline)
+# Launch Web Command Center + Telegram Bot + 24/7 Pipeline
 python manage.py run
 ```
 
-Then open **http://127.0.0.1:8000** in your browser! *(Tip: to launch ONLY the Web Command Center without background scrapers/Telegram, run `python manage.py web`.)*
+Open **http://127.0.0.1:8000** in your browser!
 
 ---
 
-## First-Time Onboarding & Regional Customization
+## 📚 Full Documentation & Guides
 
-### Setting Up Your Candidate Master Profile
-Relentless **never** uses hardcoded fake/personal resume data in production (`config/master_profile.json` is `.gitignore`d and never shipped in Git). You can configure your profile in either of two synced ways:
+Everything from our complete step-by-step setup and operations reference lives in dedicated guides so nothing gets buried:
 
-1. **Zero-CLI Web UI (Recommended for Cloud):**
-   - Sign in -> open **`06 // CONFIG & VAULT`** -> **👤 Candidate Profile**.
-   - Fill in your Name, Email, Location, LinkedIn/GitHub, Core Skills, Executive Summary, Experience roles, Education, and Application Defaults — or click **`📋 LOAD STARTER TEMPLATE`** to load `config/master_profile.example.json` into the editor, replace every field with your real history, and click **`💾 SAVE CANDIDATE PROFILE`**.
-2. **Local JSON File + Sync CLI:**
-   - Copy `config/master_profile.example.json` to `config/master_profile.json`, edit with your details, and run `python manage.py sync`.
-
-*(For test suites or demo previews only, setting `ALLOW_EXAMPLE_PROFILE=1` allows fallback to `config/master_profile.example.json`.)*
-
-### Customizing Locations & Job Boards Globally
-Relentless works for **any city or country** (US, UK, EU, Canada, India, APAC, or Remote):
-1. Open **`06 // CONFIG & VAULT`** -> **`⚙️ ENGINE & DISCOVERY CONFIG`**.
-2. Update:
-   - **Candidate Targeting -> Allowed Locations:** e.g., `["remote", "austin", "san francisco", "usa"]` or `["london", "uk", "remote"]`.
-   - **Jobboards -> Jobboard Sites:** e.g., `["linkedin", "indeed", "glassdoor"]` *(add/keep `naukri` if targeting India)*.
-   - **Jobboards -> Search Terms & Locations:** roles and cities you want JobSpy to query.
-   - **Jobboards -> Indeed Country:** set `india`, `usa`, `uk`, `canada`, `germany`, `australia`, etc.
-   - **Direct ATS Company Targets:** add Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee, and Workday CXS targets.
-3. Click **`💾 SAVE ENGINE CONFIG`** (validated via Pydantic `AppConfig` and saved to PostgreSQL immediately).
-
----
-
-## Observability: Live Logs (`/logs` & Web UI)
-
-Relentless captures structured Python logs + console warnings/errors into a bounded, **automatically secret-redacted** ring buffer (`src/logging_config.py`) alongside live startup readiness diagnostics (`src/readiness.py`):
-
-- **Web UI (`07 // LOGS & DIAG`):**
-  - Top panel shows **System Readiness & Env Checklist** (live status for Neon DB, Master Profile, Engine Config, OpenRouter/TypeSafe key, OpenAI key, Telegram, Web Security, and Gmail — with exact fix instructions for any `ERROR` or `WARNING`).
-  - Bottom panel streams server logs with level pills (`ALL`, `ERROR`, `WARN`, `INFO`), keyword search, live-stream pause toggle, **Clear Buffer**, and **Export `.txt`**.
-- **Telegram `/logs` Command:**
-  - `/logs` — last 25 log lines + active setup warnings
-  - `/logs error` — filter only `ERROR` entries
-  - `/logs warning 40` — last 40 `WARNING` entries
-  - `/logs workday` — filter log entries matching `"workday"`
-
----
-
-## CLI Command Reference (`manage.py`)
-
-| Command | Description |
+| Guide | What's Inside |
 | --- | --- |
-| `python manage.py setup` | Interactive first-time wizard (`.env`, Neon DB, `WEB_API_KEY`, Telegram ID, starter profile) |
-| `python manage.py doctor` | Full readiness check (DB connection, pending migrations, API keys, profile status, HTTP retry test) |
-| `python manage.py sync` | Push local gitignored `config/master_profile.json` and `config/config.yaml` to PostgreSQL |
-| `python manage.py run` | Start unified platform: Web Command Center + Telegram Bot + streaming ATS/JobSpy/Gmail/Distill loops |
-| `python manage.py run --once` | Execute a single pipeline cycle and exit (fails loudly if required config/profile is missing) |
-| `python manage.py run --scrape-only` | Fast cycle polling JobSpy & Gmail only (skips slower direct ATS crawl) |
-| `python manage.py web` | Run only the Web Command Center API & UI server |
-| `python manage.py bot` | Run only the Telegram HITL bot listener |
-| `python manage.py ingest` | One-off ingestion run (`--ats-only`, `--jobboards-only`, `--gmail-only`, `--sources=...`) |
-| `python manage.py distill` | Run OKF Knowledge Brain distillation into Markdown/DB |
-| `python manage.py eval` | Print live Jev Precision@K, 95% Wilson CIs, and Brier calibration table |
-| `python manage.py reset [labels\|triage\|all]` | Reset human labels, triage scores, or wipe all jobs (with confirmation safeguards) |
-| `python manage.py health` | Quick DB health check (`SELECT 1;`) |
+| **[Setup & Deployment Guide](docs/SETUP_GUIDE.md)** | Step-by-step walkthrough for every API key, Neon pooler, `WEB_API_KEY` security gate, Telegram Chat ID auto-detection, Gmail IMAP alerts, Railway Direct, Private Netlify Edge Proxy setup, and local installs. |
+| **[User & Operations Guide](docs/USER_GUIDE.md)** | Candidate profile setup, global region/city/job-board customization (US, UK, EU, India, Remote), full Web HUD `01`–`08` tour, all Telegram slash commands & `#id` resume edits, safety presets, live logs, MCP server, and `manage.py` CLI reference. |
 
 ---
 
-## Safety & Privacy Guarantees
+## 🗺️ Roadmap & Contributing
 
-- **Strict Fail-Loud Policy:** Missing required credentials or unconfigured profiles raise explicit errors and log actionable fix steps instead of falling back to fake data.
-- **No Unapproved Submissions:** Default apply mode (`DRY_RUN`) fills forms and captures screenshots only; `AUTO_CONFIRM` requires explicit button confirmation per application and enforces daily caps, domain allowlists, and per-company cooldowns.
-- **Secret Redaction:** API keys (`sk-...`, `sk-or-v1-...`), `Bearer` tokens, Telegram bot tokens, and PostgreSQL passwords in connection URIs are redacted before entering log buffers or Telegram `/logs`.
-- **Keep Personal Data Private:** `.gitignore` excludes `.env`, `config/master_profile.json`, `*.pdf`, `/output/`, `/knowledge/`, and `project_env_info.md`. Always verify `git status` before pushing to a public repository.
+Relentless is built to be practical, modular, and easy to extend:
+- Add your favorite companies or regional boards right inside **`06 // CONFIG & VAULT`** or `config/config.yaml`.
+- Pull requests are welcome for new ATS connectors, regional job boards, Typst resume templates, and evaluation benchmarks! Run `ruff check .` and `pytest tests/ -q` before opening a PR.
 
 ---
 
-## Running Tests & Linting
+## ⭐ Support the Project
 
-```bash
-ruff check .
-pytest tests/ -q
-```
+If Relentless saves you hours of job-board scrolling or saves you \$40/month on bloated AI subscription tools:
+- **Star this repository** on GitHub so more job seekers can find a transparent, low-cost alternative!
+- Open an [Issue](https://github.com/Rohan-Thoma/Relentless/issues) with ideas, bug reports, or new ATS connectors.
+
+<p align="center">
+  <sub>Licensed under the <a href="LICENSE">MIT License</a> &bull; Built consumer-first by <a href="https://github.com/Rohan-Thoma">Rohan-Thoma</a>.</sub>
+</p>
