@@ -156,6 +156,22 @@ async def test_resolve_direct_apply_url():
 
 @pytest.mark.asyncio
 async def test_poll_jobboards_flow(monkeypatch):
+    from src.config import LocationPolicy, LocationRule, load_config
+
+    india_cfg = load_config(force=True).model_copy(
+        update={
+            "location_policy": LocationPolicy(
+                operator="OR",
+                rules=[
+                    LocationRule(name="remote", work_modes=["remote"], allowed_regions=["anywhere", "worldwide", "global", "india", "apac"]),
+                    LocationRule(name="india_cities", work_modes=["hybrid", "onsite"], countries=["india"]),
+                ],
+            )
+        }
+    )
+    monkeypatch.setattr("src.ingestors.jobboards_poller.load_config", lambda *a, **k: india_cfg)
+    monkeypatch.setattr("src.ingestors.common._cfg", lambda: india_cfg)
+
     mock_df = pd.DataFrame(
         [
             {

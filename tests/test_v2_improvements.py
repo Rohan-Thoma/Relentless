@@ -46,7 +46,32 @@ def test_location_normalization_and_word_boundaries():
     assert "berlindia" not in _norm_loc("Berlin")
 
 
-def test_matches_basic_filters_india_and_remote():
+def _india_and_remote_cfg():
+    from src.config import LocationPolicy, LocationRule, load_config
+
+    return load_config(force=True).model_copy(
+        update={
+            "location_policy": LocationPolicy(
+                operator="OR",
+                rules=[
+                    LocationRule(
+                        name="remote_eligible",
+                        work_modes=["remote"],
+                        allowed_regions=["anywhere", "worldwide", "global", "india", "apac"],
+                    ),
+                    LocationRule(
+                        name="india_cities",
+                        work_modes=["hybrid", "onsite"],
+                        countries=["india"],
+                    ),
+                ],
+            )
+        }
+    )
+
+
+def test_matches_basic_filters_india_and_remote(monkeypatch):
+    monkeypatch.setattr("src.ingestors.common._cfg", _india_and_remote_cfg)
     # Allowed locations must pass
     assert matches_basic_filters("AI Engineer", "Hyderabad, India") is True
     assert matches_basic_filters("Machine Learning Engineer", "Bengaluru") is True
@@ -110,6 +135,7 @@ async def test_poll_smartrecruiters_flow(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_poll_recruitee_flow(monkeypatch):
+    monkeypatch.setattr("src.ingestors.common._cfg", _india_and_remote_cfg)
     monkeypatch.setattr("src.ingestors.ats_poller.insert_job", lambda *a, **k: True)
     monkeypatch.setattr("src.ingestors.ats_poller.job_exists", lambda *a, **k: False)
     monkeypatch.setattr("src.ingestors.ats_poller.is_near_dup", lambda *a, **k: False)
@@ -165,6 +191,7 @@ async def test_poll_remotive_flow(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_poll_lever_workplace_and_secondary_locations(monkeypatch):
+    monkeypatch.setattr("src.ingestors.common._cfg", _india_and_remote_cfg)
     monkeypatch.setattr("src.ingestors.ats_poller.insert_job", lambda *a, **k: True)
     monkeypatch.setattr("src.ingestors.ats_poller.job_exists", lambda *a, **k: False)
     monkeypatch.setattr("src.ingestors.ats_poller.is_near_dup", lambda *a, **k: False)
@@ -281,7 +308,12 @@ def test_tailored_resume_output_schema_with_categories():
     assert len(out.tailored_bullets_role_3) == 1
 
 
-def test_render_typst_pdf_generates_valid_pdf():
+def test_render_typst_pdf_generates_valid_pdf(monkeypatch, tmp_path):
+    from src.settings_store import load_example_profile
+
+    sample_prof = load_example_profile()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("src.tailor.resume_tailor.get_master_profile", lambda: sample_prof)
     tailored_data = {
         "tailored_summary": "Experienced ML Engineer specializing in Agentic RAG and Real-Time Computer Vision.",
         "matched_keywords": ["Python", "FastAPI", "YOLO", "TensorRT", "LangGraph"],

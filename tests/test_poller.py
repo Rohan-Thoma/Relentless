@@ -44,6 +44,21 @@ async def test_poll_greenhouse_flow(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_poll_lever_flow(monkeypatch):
+    from src.config import LocationPolicy, LocationRule, load_config
+
+    base = load_config(force=True)
+    india_cfg = base.model_copy(
+        update={
+            "location_policy": LocationPolicy(
+                operator="OR",
+                rules=[
+                    LocationRule(name="remote", work_modes=["remote"], allowed_regions=["anywhere", "worldwide", "global", "india", "apac"]),
+                    LocationRule(name="india_all", work_modes=["hybrid", "onsite"], countries=["india"]),
+                ],
+            )
+        }
+    )
+    monkeypatch.setattr("src.ingestors.common._cfg", lambda: india_cfg)
     monkeypatch.setattr("src.ingestors.ats_poller.insert_job", lambda *a, **k: True)
     monkeypatch.setattr("src.ingestors.ats_poller.job_exists", lambda *a, **k: False)
     data = json.loads((FIX / "lever.json").read_text())
@@ -72,6 +87,21 @@ async def test_poll_ashby_flow(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_poll_workday_flow(monkeypatch):
+    from src.config import LocationPolicy, LocationRule, load_config
+
+    base = load_config(force=True)
+    india_cfg = base.model_copy(
+        update={
+            "location_policy": LocationPolicy(
+                operator="OR",
+                rules=[
+                    LocationRule(name="remote", work_modes=["remote"], allowed_regions=["anywhere", "worldwide", "global", "india", "apac"]),
+                    LocationRule(name="india_all", work_modes=["hybrid", "onsite"], countries=["india"]),
+                ],
+            )
+        }
+    )
+    monkeypatch.setattr("src.ingestors.common._cfg", lambda: india_cfg)
     monkeypatch.setattr("src.ingestors.ats_poller.insert_job", lambda *a, **k: True)
     monkeypatch.setattr("src.ingestors.ats_poller.job_exists", lambda *a, **k: False)
     monkeypatch.setattr("src.ingestors.ats_poller.is_near_dup", lambda *a, **k: False)

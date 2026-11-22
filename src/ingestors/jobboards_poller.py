@@ -1,13 +1,18 @@
 import asyncio
 import logging
-import pandas as pd
 
 from jobspy import scrape_jobs
+import pandas as pd
 
 from src.config import load_config
 from src.ingestors.common import clean_html, insert_job, matches_basic_filters
 from src.ingestors.freshness import is_timestamp_fresh
+from src.ingestors.location_policy import (
+    derive_jobboard_queries_from_policy,
+    extract_job_location_facts,
+)
 from src.ingestors.url_resolver import register_discovered_board
+from src.ingestors.watermarks import compute_delta_hours, update_watermark
 from src.settings_store import get_master_profile
 
 logger = logging.getLogger(__name__)
@@ -46,7 +51,6 @@ def get_jobboards_parameters(
         if jb_cfg and jb_cfg.search_terms:
             terms.extend(jb_cfg.search_terms)
         else:
-            # Fallback ONLY when explicit jobboards.search_terms is not configured
             if cfg.candidate_preferences and cfg.candidate_preferences.target_role_keywords:
                 for kw in cfg.candidate_preferences.target_role_keywords:
                     clean_kw = kw.strip()
@@ -69,33 +73,16 @@ def get_jobboards_parameters(
             except Exception as e:
                 logger.warning("Jobboards search_terms fallback could not read master_profile: %s", e)
 
-    # 4. Locations: prioritize explicit config.jobboards.locations
+    # 4. Locations: prioritize explicit arg -> config.jobboards.locations -> derived from location_policy
     locs = list(locations) if locations else []
     if not locs:
         if jb_cfg and jb_cfg.locations:
             locs.extend(jb_cfg.locations)
         else:
-            # Fallback ONLY when explicit jobboards.locations is not configured
-            try:
-                profile = get_master_profile()
-                if profile:
-                    loc = profile.get("location")
-                    if loc and loc not in locs:
-                        locs.append(loc)
-                    app_defaults = profile.get("application_defaults") or {}
-                    city = app_defaults.get("current_city")
-                    if city and city not in locs:
-                        locs.append(city)
-            except Exception as e:
-                logger.warning("Jobboards locations fallback could not read master_profile: %s", e)
+            policy = cfg.effective_location_policy()
+            for q in derive_jobboard_queries_from_policy(policy):
+                locs.append(q["location"])
 
-            if not locs and cfg.candidate_preferences and cfg.candidate_preferences.allowed_locations:
-                for al in cfg.candidate_preferences.allowed_locations:
-                    al_clean = al.strip().title()
-                    if al_clean not in locs:
-                        locs.append(al_clean)
-
-    # Deduplicate preserving order
     terms = list(dict.fromkeys(terms))
     locs = list(dict.fromkeys(locs))
     target_sites = list(dict.fromkeys(target_sites))
@@ -112,6 +99,38 @@ def _get_row_str(row: pd.Series, key: str) -> str:
     return str(val).strip()
 
 
+def _get_row_bool(row: pd.Series, key: str) -> bool | None:
+    if key not in row:
+        return None
+    val = row[key]
+    if pd.isna(val) or val is None:
+        return None
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().lower()
+    if s in ("true", "1", "yes"):
+        return True
+    if s in ("false", "0", "no"):
+        return False
+    return None
+
+
+def _is_remote_query(loc: str, policy) -> bool:
+    low = (loc or "").strip().lower()
+    if low in ("remote", "anywhere", "worldwide", "global"):
+        return True
+    # If every active location rule requires remote-only, pass is_remote=True to JobSpy!
+    if policy and policy.rules:
+        all_remote_only = all(
+            {m.strip().lower() for m in r.work_modes} == {"remote"}
+            for r in policy.rules
+            if r.work_modes
+        )
+        if all_remote_only:
+            return True
+    return False
+
+
 def _scrape_sync(
     site: str | list[str] | None = None,
     sites: list[str] | None = None,
@@ -120,6 +139,7 @@ def _scrape_sync(
     results_wanted: int = 20,
     hours_old: int = 72,
     country_indeed: str | None = None,
+    is_remote: bool = False,
     **kwargs,
 ) -> pd.DataFrame:
     target = sites or (site if isinstance(site, list) else ([site] if site else ["naukri", "linkedin", "indeed"]))
@@ -140,16 +160,18 @@ def _scrape_sync(
             results_wanted=results_wanted,
             hours_old=hours_old,
             country_indeed=resolved_country,
+            is_remote=is_remote,
             linkedin_fetch_description=True,
             verbose=0,
         )
         return df if df is not None and not df.empty else pd.DataFrame()
     except Exception as e:
         logger.error(
-            "JobSpy scrape failed for sites=%s, term='%s', loc='%s': %s",
+            "JobSpy scrape failed for sites=%s, term='%s', loc='%s', is_remote=%s: %s",
             target,
             search_term,
             location,
+            is_remote,
             e,
         )
         return pd.DataFrame()
@@ -162,6 +184,9 @@ async def poll_jobboards(
     results_wanted: int | None = None,
     hours_old: int | None = None,
 ) -> int:
+    cfg = load_config()
+    policy = cfg.effective_location_policy()
+
     terms, locs, target_sites, res_count, hrs = get_jobboards_parameters(
         search_terms=search_terms,
         locations=locations,
@@ -188,8 +213,12 @@ async def poll_jobboards(
 
     total_added = 0
     for idx, (term, loc) in enumerate(combos, 1):
+        remote_flag = _is_remote_query(loc, policy)
+        wm_key = f"jobspy:{sites_label}:{term.lower()}:{loc.lower()}:r{int(remote_flag)}"
+        effective_hrs = compute_delta_hours(wm_key, default_hours=hrs)
+
         print(
-            f"  🔍 [JobSpy {idx}/{total_combos}] Querying '{term}' in '{loc}' on [{sites_label}]...",
+            f"  🔍 [JobSpy {idx}/{total_combos}] Querying '{term}' in '{loc}' (remote={remote_flag}, window={effective_hrs}h) on [{sites_label}]...",
             flush=True,
         )
         try:
@@ -199,16 +228,17 @@ async def poll_jobboards(
                 search_term=term,
                 location=loc,
                 results_wanted=res_count,
-                hours_old=hrs,
+                hours_old=effective_hrs,
+                is_remote=remote_flag,
             )
             if df is None or df.empty:
                 print(f"    ↳ No postings returned for '{term}' in '{loc}'.", flush=True)
+                await asyncio.to_thread(update_watermark, wm_key, None, 0)
                 continue
 
             site_added = 0
             site_counts = {}
             for _, row in df.iterrows():
-                # Enforce freshness filter
                 raw_date = row.get("date_posted") if hasattr(row, "get") else row.get("date_posted", None)
                 if not is_timestamp_fresh(raw_date, float(hrs)):
                     continue
@@ -220,6 +250,8 @@ async def poll_jobboards(
                 job_url = _get_row_str(row, "job_url")
                 job_url_direct = _get_row_str(row, "job_url_direct")
                 row_site = _get_row_str(row, "site") or "jobboard"
+                row_is_remote = _get_row_bool(row, "is_remote")
+                ext_id = _get_row_str(row, "id") or None
 
                 site_counts[row_site] = site_counts.get(row_site, 0) + 1
 
@@ -229,7 +261,17 @@ async def poll_jobboards(
 
                 await asyncio.to_thread(register_discovered_board, apply_url)
 
-                if matches_basic_filters(title, location_val):
+                clean_jd = clean_html(description)
+                effective_loc = location_val or (loc if remote_flag else "")
+                if matches_basic_filters(title, effective_loc, jd_text=clean_jd, is_remote=row_is_remote, cfg=cfg):
+                    facts = extract_job_location_facts(
+                        title=title,
+                        location=effective_loc,
+                        jd_text=clean_jd,
+                        is_remote_hint=row_is_remote,
+                        candidate_country=policy.candidate_country,
+                        check_jd_geo_blockers=policy.check_jd_geo_blockers,
+                    )
                     inserted = await asyncio.to_thread(
                         insert_job,
                         None,
@@ -238,12 +280,16 @@ async def poll_jobboards(
                         title,
                         location_val or loc,
                         apply_url,
-                        clean_html(description),
+                        clean_jd,
+                        original_source_url=job_url if (job_url_direct and job_url and job_url != job_url_direct) else None,
+                        work_mode=facts.work_mode,
+                        external_job_id=ext_id,
                     )
                     if inserted:
                         site_added += 1
 
             total_added += site_added
+            await asyncio.to_thread(update_watermark, wm_key, None, len(df))
             counts_breakdown = ", ".join(f"{s}: {c}" for s, c in site_counts.items())
             print(
                 f"    ↳ Fetched {len(df)} postings ({counts_breakdown}) -> +{site_added} new matching jobs saved.",

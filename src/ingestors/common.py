@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 from collections.abc import Callable
 import logging
 import re
 
 from bs4 import BeautifulSoup
 
-from src.config import load_config
+from src.config import AppConfig, load_config
 from src.db import get_connection, make_dedup_hash
 from src.dedupe import is_near_dup, normalize_title
+from src.ingestors.location_policy import (
+    evaluate_job_location,
+    normalize_location_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +24,7 @@ def set_job_inserted_hook(hook: Callable[[dict], None] | None) -> None:
     _JOB_INSERTED_HOOK = hook
 
 
-def _cfg():
+def _cfg() -> AppConfig:
     return load_config()
 
 
@@ -33,39 +39,51 @@ def tokenize(text: str):
 
 
 def norm_loc(loc: str) -> str:
-    l = (loc or "").lower().strip()
-    word_aliases = {
-        r"\bbengaluru\b": "bangalore",
-        r"\bgurugram\b": "gurgaon",
-        r"\bnew delhi\b": "delhi",
-        r"\bncr\b": "delhi",
-        r"\bsecunderabad\b": "hyderabad",
-        r"\bnavi mumbai\b": "mumbai",
-        r"\bkarnataka\b": "bangalore india",
-        r"\btelangana\b": "hyderabad india",
-        r"\bmaharashtra\b": "mumbai pune india",
-        r"\btamil nadu\b": "chennai india",
-        r"\bup\b": "noida india",
-        r",\s*in\b": ", india",
-        r"\bin\s*$": "india",
-    }
-    for pat, repl in word_aliases.items():
-        l = re.sub(pat, repl, l)
-    return l
+    return normalize_location_text(loc)
 
 
-def matches_basic_filters(title: str, location: str) -> bool:
-    cfg = _cfg()
-    prefs = cfg.candidate_preferences
+def extract_min_required_years(title: str = "", jd_text: str = "") -> int | None:
+    """Extracts minimum years of experience explicitly required (e.g. '6 to 10 years' -> 6, '8+ years' -> 8)."""
+    combined = f"{title or ''}\n{(jd_text or '')[:3500]}"
+    mins: list[int] = []
+    # Range patterns like '6 to 10 years', '6-10 yrs', '7 – 12 years'
+    for m in re.finditer(r"\b(\d{1,2})\s*(?:to|-|–|—)\s*(\d{1,2})\s*(?:\+?\s*)?(?:years?|yrs?)\b", combined, re.IGNORECASE):
+        lo = int(m.group(1))
+        hi = int(m.group(2))
+        if 0 < lo <= hi <= 25:
+            mins.append(lo)
+    # Single lower-bound patterns like '8+ years of experience', 'minimum 7 years'
+    for m in re.finditer(
+        r"(?:minimum\s+(?:of\s+)?|at\s+least\s+)?(\d{1,2})\s*\+\s*(?:years?|yrs?)\s+(?:of\s+)?(?:experience|relevant|industry|engineering|professional)",
+        combined,
+        re.IGNORECASE,
+    ):
+        val = int(m.group(1))
+        if 0 < val <= 25:
+            mins.append(val)
+    if not mins:
+        return None
+    # Use the smallest explicit minimum requirement if multiple appear (conservative: avoids false rejections)
+    return min(mins)
+
+
+def matches_basic_filters(
+    title: str,
+    location: str,
+    jd_text: str = "",
+    is_remote: bool | None = None,
+    cfg: AppConfig | None = None,
+) -> bool:
+    active_cfg = cfg or _cfg()
+    prefs = active_cfg.candidate_preferences
     t_low = (title or "").lower()
-    l_low = norm_loc(location or "")
 
-    # exclusion: word-boundary
+    # 1. Exclusion: word-boundary title filter (blocks intern, lead, staff, director, federal, etc.)
     for bad in prefs.exclude_title_keywords:
         if re.search(r"\b" + re.escape(bad.lower()) + r"\b", t_low):
             return False
 
-    # keyword match: technical tokens substring or word-boundary; plain words word-boundary
+    # 2. Target role keyword match
     tech_tokens = {"c++", "c#", ".net", "node.js", "ai", "ml"}
     matched = False
     for good in prefs.target_role_keywords:
@@ -81,45 +99,21 @@ def matches_basic_filters(title: str, location: str) -> bool:
     if not matched:
         return False
 
-    # US/EU/UK/Canada only rejection (unless "india" explicitly mentioned)
-    us_eu_only = re.search(
-        r"\b(us only|usa only|u\.s\. only|united states only|eu only|uk only|canada only|must reside in the u\.s)\b",
-        l_low,
+    # 3. Optional max_experience_years check against explicit experience bounds
+    if prefs.max_experience_years is not None:
+        min_req = extract_min_required_years(title, jd_text)
+        if min_req is not None and min_req > prefs.max_experience_years:
+            return False
+
+    # 4. Strict composable LocationPolicy evaluation (OR / AND / XOR / NOT)
+    policy = active_cfg.effective_location_policy()
+    loc_ok, _reason, _facts = evaluate_job_location(
+        title=title,
+        location=location,
+        jd_text=jd_text,
+        is_remote_hint=is_remote,
+        policy=policy,
     )
-    if us_eu_only and "india" not in l_low:
-        return False
-
-    # location match
-    allowed_locs_lower = [loc.lower() for loc in prefs.allowed_locations]
-    remote_keywords = {
-        "remote",
-        "hybrid",
-        "anywhere",
-        "worldwide",
-        "global",
-        "work from home",
-        "wfh",
-        "distributed",
-        "apac",
-    }
-    has_remote = any(re.search(r"\b" + re.escape(rw) + r"\b", l_low) for rw in remote_keywords)
-
-    loc_ok = False
-    if (
-        (
-            "remote" in allowed_locs_lower
-            or "anywhere" in allowed_locs_lower
-            or "global" in allowed_locs_lower
-            or "worldwide" in allowed_locs_lower
-        )
-        and has_remote
-    ) or ("india" in allowed_locs_lower and "india" in l_low):
-        loc_ok = True
-    else:
-        for loc in allowed_locs_lower:
-            if re.search(r"\b" + re.escape(loc) + r"\b", l_low):
-                loc_ok = True
-                break
     return loc_ok
 
 
@@ -154,6 +148,9 @@ def insert_job(
     apply_url: str,
     jd_text: str,
     original_source_url: str | None = None,
+    work_mode: str | None = None,
+    external_job_id: str | None = None,
+    hiring_contact_email: str | None = None,
 ) -> bool:
     dedup_hash = make_dedup_hash(company, title, location)
 
@@ -182,20 +179,39 @@ def insert_job(
                     location,
                     apply_url,
                     jd_text,
-                    original_source_url,
+                    original_source_url=original_source_url,
+                    work_mode=work_mode,
+                    external_job_id=external_job_id,
+                    hiring_contact_email=hiring_contact_email,
                 )
         except Exception as e:
             logger.warning("Could not insert job: %s", e)
             return False
 
-    if is_near_dup(conn, company, title):
+    if is_near_dup(conn, company, title, work_mode=work_mode):
         return False
     canonical = normalize_title(title)
     with conn.cursor() as cur:
+        # Tier 1 external_job_id dedupe check if provided
+        if external_job_id:
+            try:
+                cur.execute(
+                    "SELECT 1 FROM jobs WHERE source_ats = %s AND external_job_id = %s;",
+                    (source_ats, external_job_id),
+                )
+                if cur.fetchone() is not None:
+                    return False
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+
         cur.execute(
             """
-            INSERT INTO jobs (dedup_hash, source_ats, company, title, location, apply_url, jd_text, canonical_title, original_source_url)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO jobs (
+                dedup_hash, source_ats, company, title, location, apply_url, jd_text,
+                canonical_title, original_source_url, work_mode, external_job_id, hiring_contact_email
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (dedup_hash) DO NOTHING
             RETURNING id;
             """,
@@ -209,6 +225,9 @@ def insert_job(
                 jd_text,
                 canonical,
                 original_source_url,
+                work_mode,
+                external_job_id,
+                hiring_contact_email,
             ),
         )
         row = cur.fetchone()
@@ -236,6 +255,9 @@ def insert_job(
                 "jd_text": jd_text,
                 "canonical_title": canonical,
                 "original_source_url": original_source_url,
+                "work_mode": work_mode,
+                "external_job_id": external_job_id,
+                "hiring_contact_email": hiring_contact_email,
             }
             try:
                 _JOB_INSERTED_HOOK(job_dict)

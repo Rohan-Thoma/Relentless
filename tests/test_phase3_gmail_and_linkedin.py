@@ -73,6 +73,20 @@ async def test_poll_gmail_alerts_no_credentials(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_poll_gmail_alerts_flow(monkeypatch):
+    from src.config import LocationPolicy, LocationRule, load_config
+
+    india_cfg = load_config(force=True).model_copy(
+        update={
+            "location_policy": LocationPolicy(
+                operator="OR",
+                rules=[
+                    LocationRule(name="remote", work_modes=["remote"], allowed_regions=["anywhere", "worldwide", "global", "india", "apac"]),
+                    LocationRule(name="india_cities", work_modes=["hybrid", "onsite"], countries=["india"]),
+                ],
+            )
+        }
+    )
+    monkeypatch.setattr("src.ingestors.common._cfg", lambda: india_cfg)
     monkeypatch.setenv("GMAIL_ADDRESS", "test@example.com")
     monkeypatch.setenv("GMAIL_APP_PASSWORD", "secret-app-password")
 
