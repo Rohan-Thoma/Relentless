@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 from collections import Counter
 import logging
@@ -5,15 +7,23 @@ import math
 import os
 import re
 import time
+from typing import Any
 
 from dotenv import load_dotenv
 import httpx
 
-from src.calibrate import apply_calibration, fit_calibration
+from src.calibrate import (
+    apply_calibration,
+    fit_and_persist_calibration_model,
+    load_active_calibration_model,
+)
+from src.config import load_config
 from src.db import get_connection
+from src.embeddings import semantic_search_concepts
 from src.httpx_utils import post_with_retry
 from src.jd_parse import parse_jd
 from src.knowledge.store import get_store
+from src.model_catalog import resolve_triage_endpoint
 from src.notify import alert
 from src.settings_store import get_master_profile
 
@@ -24,6 +34,8 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 logger = logging.getLogger(__name__)
 
+SCORE_TIER_LABELS = ["reject", "weak_fit", "moderate_fit", "strong_fit", "dream_role"]
+
 
 def _build_jd_description(job: dict, profile: dict) -> str:
     jd_text = job.get("jd_text") or ""
@@ -32,25 +44,22 @@ def _build_jd_description(job: dict, profile: dict) -> str:
     if structured.get("salary_mentions"):
         parts.append("Compensation: " + ", ".join(structured["salary_mentions"]))
     if structured.get("skills"):
-        parts.append("Skills: " + ", ".join(structured["skills"][:25]))
+        parts.append("Skills: " + ", ".join(structured["skills"][:35]))
     if structured.get("requirements"):
-        parts.append("Requirements: " + structured["requirements"][:1500])
+        parts.append("Requirements: " + structured["requirements"][:2500])
     if structured.get("responsibilities"):
-        parts.append("Responsibilities: " + structured["responsibilities"][:1500])
+        parts.append("Responsibilities: " + structured["responsibilities"][:2500])
     summary = "\n".join(parts)
-    return (summary + "\n\n" + jd_text[:6000]).strip()
-
-
-SCORE_TIER_LABELS = ["reject", "weak_fit", "moderate_fit", "strong_fit", "dream_role"]
+    return (summary + "\n\n" + jd_text[:12000]).strip()
 
 
 def compute_baseline_similarity(jd_text: str) -> float:
-    """Computes a fast baseline cosine similarity between profile skills and JD text for the Eval Harness."""
+    """Fast lexical baseline cosine similarity retained for ablation benchmarking vs Jev & embeddings."""
     if not jd_text:
         return 0.0
-    PROFILE = get_master_profile()
-    summary_str = PROFILE.get("experience_summary", "")
-    profile_text = " ".join(PROFILE.get("core_skills", []) + [summary_str]).lower()
+    profile = get_master_profile()
+    summary_str = profile.get("experience_summary", "")
+    profile_text = " ".join(profile.get("core_skills", []) + [summary_str]).lower()
     words_a = re.findall(r"[a-z0-9+#]{2,}", profile_text)
     words_b = re.findall(r"[a-z0-9+#]{2,}", jd_text.lower())
     if not words_a or not words_b:
@@ -63,45 +72,86 @@ def compute_baseline_similarity(jd_text: str) -> float:
     return round(dot / (norm_a * norm_b), 4) if (norm_a and norm_b) else 0.0
 
 
-async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
-    """
-    Calls Jev System-1 Decision Model via TypeSafe Direct (/v1/systemone)
-    or OpenRouter Decisions API (/api/alpha/decisions) in a single parallel pass.
-    """
-    if TYPESAFE_API_KEY:
-        url = "https://api.typesafe.ai/v1/systemone"
-        api_key = TYPESAFE_API_KEY
-        model_id = "jev-1.13.0"
-    elif OPENROUTER_API_KEY:
-        url = "https://openrouter.ai/api/alpha/decisions"
-        api_key = OPENROUTER_API_KEY
-        model_id = "typesafe/jev-1.14"
-    else:
-        raise ValueError("Set either TYPESAFE_API_KEY or OPENROUTER_API_KEY in your .env file!")
+def _summarize_candidate_for_jev(profile: dict[str, Any], cfg) -> dict[str, Any]:
+    app_defaults = profile.get("application_defaults") or {}
+    exp_years = app_defaults.get("total_experience_years") or app_defaults.get("relevant_experience_years") or ""
+    exp_brief = [
+        {
+            "company": e.get("company", ""),
+            "role": e.get("role", ""),
+            "dates": e.get("dates", ""),
+            "highlights": (e.get("bullets") or [])[:3],
+        }
+        for e in (profile.get("experience") or [])[:4]
+    ]
+    policy = cfg.effective_location_policy()
+    return {
+        "location": profile.get("location", ""),
+        "total_experience_years": exp_years,
+        "experience_summary": profile.get("experience_summary", ""),
+        "core_skills": profile.get("core_skills", []),
+        "experience": exp_brief,
+        "target_roles": cfg.candidate_preferences.target_role_keywords[:20],
+        "excluded_titles": cfg.candidate_preferences.exclude_title_keywords,
+        "location_policy": {
+            "operator": policy.operator,
+            "candidate_country": policy.candidate_country,
+            "reject_countries": policy.reject_countries,
+            "rules": [r.model_dump(exclude_defaults=True) for r in policy.rules],
+        },
+    }
 
-    PROFILE = get_master_profile()
 
+async def retrieve_relevant_okf_context(
+    job: dict[str, Any],
+    client: httpx.AsyncClient | None = None,
+    top_k: int = 5,
+) -> str:
+    """Semantic RAG over OKF Brain concepts so Jev sees ONLY knowledge relevant to this job."""
     try:
         store = get_store()
-        learned_scam = store.search("scam", type="Scam Pattern")[:5]
-        learned_pref = store.search("preference", type="Candidate Preference")[:5]
-        learned_parts = [c.body for c in (learned_scam + learned_pref)]
-        learned_context = "\n".join(learned_parts)
+        all_concepts = [
+            c
+            for c in store.concepts.values()
+            if c.concept_type in ("Scam Pattern", "Candidate Preference", "Company Note", "Strategy")
+        ]
+        if not all_concepts:
+            return ""
+        query_text = f"{job.get('company', '')} {job.get('title', '')} {job.get('location', '')}\n{(job.get('jd_text') or '')[:2500]}"
+        matched = await semantic_search_concepts(query_text, all_concepts, top_k=top_k, client=client)
+        return "\n\n".join(f"[{c.concept_type} — {c.name}]\n{c.body}" for c in matched)
     except Exception:
-        learned_context = ""
+        return ""
+
+
+async def evaluate_with_jev(
+    client: httpx.AsyncClient,
+    job: dict[str, Any],
+    learned_context: str | None = None,
+) -> dict[str, Any]:
+    """Calls Jev System-1 Decision Model via configured provider (OpenRouter Decisions or TypeSafe Direct)."""
+    cfg = load_config()
+    url, api_key, model_id = resolve_triage_endpoint(cfg.models.triage.provider, cfg.models.triage.model)
+    if not url or not api_key:
+        raise ValueError("Set either TYPESAFE_API_KEY or OPENROUTER_API_KEY in your .env file!")
+
+    profile = get_master_profile()
+    cand_state = _summarize_candidate_for_jev(profile, cfg)
+    exp_years_label = cand_state["total_experience_years"] or "mid-level"
+
+    if learned_context is None:
+        learned_context = await retrieve_relevant_okf_context(job, client=client)
 
     payload = {
         "model": model_id,
         "state": {
-            "candidate": {
-                "location": PROFILE.get("location", ""),
-                "core_skills": PROFILE.get("core_skills", []),
-            },
+            "candidate": cand_state,
             "job_listing": {
                 "company": job["company"],
                 "title": job["title"],
                 "location": job["location"],
-                "description": _build_jd_description(job, PROFILE),
+                "work_mode": job.get("work_mode") or "unknown",
+                "description": _build_jd_description(job, profile),
             },
             "learned_context": learned_context,
         },
@@ -116,22 +166,25 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
             },
             "ats_fit_tier": {
                 "type": "score",
-                "instructions": "How strongly does this job match the candidate's Python, AI/ML, LLM, and Backend engineering profile (1 to 4 years experience)?",
+                "instructions": (
+                    f"How strongly does this job match the candidate's verified experience ({exp_years_label} years), "
+                    f"technical stack, target roles, and location_policy?"
+                ),
                 "criteria": [
-                    "Unrelated role (e.g., iOS, Android, pure Frontend, Sales) or requires 8+ years Principal/Director seniority.",
-                    "Weak match: shares only 1-2 peripheral keywords or wrong primary language (e.g., pure C++ embedded or .NET).",
-                    "Moderate match: general software, data, or cloud engineering role with partial Python/SQL overlap.",
-                    "Strong match: directly aligns with Python Backend, FastAPI, PostgreSQL, Data, or ML engineering at early-to-mid seniority.",
-                    "Dream role: exact match for AI Engineer, Agentic LLM workflows, LangGraph, RAG, or Python Backend Engineer matching the candidate's target roles and locations/Remote.",
+                    "Unrelated role (e.g., Intern, iOS, Android, pure Frontend, Sales), wrong geo/work-mode, or requires far higher seniority (8+ yrs Principal/Director).",
+                    "Weak match: shares only 1-2 peripheral keywords or wrong primary stack (e.g., pure C++ embedded, Java enterprise, or .NET).",
+                    "Moderate match: general software, data, or cloud engineering role with partial Python/ML/SQL overlap.",
+                    "Strong match: directly aligns with candidate's ML/AI, Computer Vision, LLM, or Python Backend stack and seniority level.",
+                    "Dream role: exact match for candidate's core strengths (GenAI/Agentic LLMs, Computer Vision/Edge AI, Python Backend/MLOps) and location_policy.",
                 ],
             },
             "persona": {
                 "type": "choice",
                 "instructions": "Which candidate resume persona best matches this job description?",
                 "criteria": {
-                    "ai_agent_engineer": "Roles emphasizing LLMs, GenAI, Agentic workflows, LangGraph, RAG, or Machine Learning.",
-                    "backend_python_engineer": "Roles emphasizing Python backend APIs, FastAPI, microservices, distributed systems, or cloud infrastructure.",
-                    "data_ml_engineer": "Roles emphasizing data engineering, SQL, PostgreSQL, analytics, Streamlit dashboards, or ETL pipelines.",
+                    "ai_agent_engineer": "Roles emphasizing LLMs, GenAI, Agentic workflows, LangGraph, RAG, VLMs, or Applied Machine Learning.",
+                    "backend_python_engineer": "Roles emphasizing Python backend APIs, FastAPI, microservices, distributed systems, or cloud/MLOps infrastructure.",
+                    "data_ml_engineer": "Roles emphasizing data engineering, SQL, PostgreSQL, analytics, Computer Vision pipelines, or ETL.",
                 },
             },
         },
@@ -140,10 +193,7 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
     resp = await post_with_retry(
         client,
         url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json=payload,
     )
     if resp.status_code != 200:
@@ -151,16 +201,12 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
 
     answers = resp.json()["answers"]
 
-    # 1. Extract Noul (0.0 to 1.0 probability of scam/harvester)
     scam_prob = float(answers["scam_or_harvester"]["noul"])
-
-    # 2. Extract Score (0.0 to 4.0 position across the 5 ordered rubric levels)
     score_ans = answers["ats_fit_tier"]
-    raw_score = float(score_ans["score"])  # 0.0 to 4.0
+    raw_score = float(score_ans["score"])
     level_idx = min(4, max(0, int(round(raw_score))))
     fit_tier = SCORE_TIER_LABELS[level_idx]
 
-    # Convert 0..4 rubric score into a calibrated 0..1 fit probability
     probs = score_ans.get("probabilities", {})
     if probs:
         fit_prob = float(
@@ -171,7 +217,6 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
     else:
         fit_prob = raw_score / 4.0
 
-    # 3. Extract Choice (winning resume persona)
     persona = answers["persona"]["choice"]
 
     return {
@@ -182,25 +227,15 @@ async def evaluate_with_jev(client: httpx.AsyncClient, job: dict) -> dict:
     }
 
 
-_CAL_CACHE = {"model": None, "ts": 0.0}
+_CAL_CACHE: dict[str, Any] = {"model": None, "ts": 0.0}
 _CAL_LOCK = asyncio.Lock()
 
 
-def _fetch_calibration_model_sync():
-    try:
-        with get_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT jev_fit_prob, human_action FROM jobs WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM') AND jev_fit_prob IS NOT NULL;"
-            )
-            labeled_rows = cur.fetchall()
-        pairs = [
-            (r["jev_fit_prob"], 1 if r["human_action"] == "APPLIED" else 0)
-            for r in labeled_rows
-            if r["jev_fit_prob"] is not None
-        ]
-        return fit_calibration(pairs, min_n=20)
-    except Exception:
-        return None
+def _fetch_or_refresh_calibration_sync():
+    active = load_active_calibration_model()
+    if active is not None:
+        return active
+    return fit_and_persist_calibration_model(min_n=30, min_per_class=10)
 
 
 async def get_cached_calibration_model(ttl_seconds: float = 300.0):
@@ -210,78 +245,26 @@ async def get_cached_calibration_model(ttl_seconds: float = 300.0):
     async with _CAL_LOCK:
         if _CAL_CACHE["model"] is not None and (now - _CAL_CACHE["ts"]) < ttl_seconds:
             return _CAL_CACHE["model"]
-        model = await asyncio.to_thread(_fetch_calibration_model_sync)
+        model = await asyncio.to_thread(_fetch_or_refresh_calibration_sync)
         _CAL_CACHE["model"] = model
         _CAL_CACHE["ts"] = now
         return model
 
 
 async def score_single_job(client: httpx.AsyncClient, job: dict) -> dict | None:
-    cos_sim = compute_baseline_similarity(job.get("jd_text") or "")
-    cal_model = await get_cached_calibration_model()
+    """Executes LangGraph TriageGraph (Embed -> OKF Semantic RAG -> Jev -> Calibration -> Persist)."""
+    from src.orchestrator.graph import run_triage_graph
+
     try:
-        res = await evaluate_with_jev(client, job)
-        raw_fit = res["jev_fit_prob"]
-        cal_fit = apply_calibration(cal_model, raw_fit) if cal_model else raw_fit
-        effective_fit = cal_fit if cal_model else raw_fit
-
-        passed = (res["jev_scam_prob"] < 0.30) and (effective_fit >= 0.55)
-        stage = "TRIAGED" if passed else "DROPPED"
-
-        def _persist():
-            with get_connection() as c, c.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE jobs
-                    SET cosine_sim = %s,
-                        jev_scam_prob = %s,
-                        jev_fit_tier = %s,
-                        jev_fit_prob = %s,
-                        jev_fit_prob_cal = %s,
-                        jev_persona = %s,
-                        triage_passed = %s,
-                        workflow_stage = %s
-                    WHERE id = %s;
-                    """,
-                    (
-                        cos_sim,
-                        res["jev_scam_prob"],
-                        res["jev_fit_tier"],
-                        raw_fit,
-                        cal_fit,
-                        res["jev_persona"],
-                        passed,
-                        stage,
-                        job["id"],
-                    ),
-                )
-                c.commit()
-
-        await asyncio.to_thread(_persist)
-
-        icon = "✅ PASS" if passed else "🗑️ DROP"
-        print(
-            f"  {icon} | [{job['company']}] {job['title'][:42]} "
-            f"-> Fit: {raw_fit:.2f} (cal={cal_fit:.2f}, {res['jev_fit_tier']}) | Scam: {res['jev_scam_prob']:.2f}",
-            flush=True,
-        )
-
-        enriched = dict(job)
-        enriched.update({
-            "cosine_sim": cos_sim,
-            "jev_scam_prob": res["jev_scam_prob"],
-            "jev_fit_tier": res["jev_fit_tier"],
-            "jev_fit_prob": raw_fit,
-            "jev_fit_prob_cal": cal_fit,
-            "jev_persona": res["jev_persona"],
-            "triage_passed": passed,
-            "workflow_stage": stage,
-        })
-        return enriched
+        return await run_triage_graph(job=job, http_client=client)
     except Exception as e:
         logger.error("Error scoring job #%s (%s): %s", job.get("id"), job.get("company"), e)
         alert(f"⚠️ Error scoring job #{job.get('id')} ({job.get('company')}): {e}")
         return None
+
+
+def compute_calibrated_rank_score(cal_model, raw_fit: float) -> float:
+    return round(apply_calibration(cal_model, raw_fit), 4) if cal_model else raw_fit
 
 
 async def run_triage(batch_limit: int = 100):
@@ -298,13 +281,15 @@ async def run_triage(batch_limit: int = 100):
         print("✨ All jobs in Neon PostgreSQL are already triaged!")
         return
 
-    route = "TypeSafe Direct (/v1/systemone)" if TYPESAFE_API_KEY else "OpenRouter Decisions API (/api/alpha/decisions)"
-    print(f"🧠 Running System-1 Jev Triage on {len(unscored_jobs)} jobs via {route}...")
+    cfg = load_config()
+    print(
+        f"🧠 Running LangGraph TriageGraph ({cfg.models.triage.provider}/{cfg.models.triage.model}) on {len(unscored_jobs)} jobs..."
+    )
 
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(cfg.ingestion.triage_concurrency)
     passed_count = 0
 
-    async with httpx.AsyncClient(timeout=25.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         async def _bound_score(job):
             nonlocal passed_count
             async with sem:
@@ -314,7 +299,7 @@ async def run_triage(batch_limit: int = 100):
 
         await asyncio.gather(*[_bound_score(job) for job in unscored_jobs])
 
-    print(f"\n🎯 Jev Triage finished! {passed_count}/{len(unscored_jobs)} jobs cleared the gate.")
+    print(f"\n🎯 LangGraph Triage finished! {passed_count}/{len(unscored_jobs)} jobs cleared the gate.")
 
 
 if __name__ == "__main__":

@@ -220,7 +220,7 @@ def test_v3_mock_ats_scorer():
         "tailored_summary": "Machine Learning Engineer specializing in PyTorch inference latency profiling and vector databases.",
         "matched_keywords": ["PyTorch", "Latency Profiling", "Vector Databases", "Docker", "FastAPI"],
         "skill_categories": [
-            {"category": "Core ML", "skills": ["PyTorch", "Latency Profiling", "Vector Databases"]}
+            {"category": "Core ML", "skills": ["Python", "PyTorch", "FastAPI", "Docker", "Latency Profiling", "Vector Databases"]}
         ],
         "tailored_bullets_role_1": [
             "Architected low-latency PyTorch inference microservices with FastAPI, achieving 40% latency reduction and 50 FPS throughput.",
