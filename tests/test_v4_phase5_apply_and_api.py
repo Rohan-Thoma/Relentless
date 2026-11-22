@@ -182,6 +182,7 @@ async def test_detector_flags_captcha_and_apply_graph_sets_human_gate(monkeypatc
     assert "human handoff" in reason.lower()
 
     # Verify ApplyAgentGraph propagates human_gate=True on aggregator/CAPTCHA escalations
+    monkeypatch.delenv("RELENTLESS_TEST_LIVE_DB", raising=False)
     cfg_prep = AppConfig.model_validate({"automation": {"apply_mode": "PREPARE_ONLY"}})
     monkeypatch.setattr("src.apply.runner.load_config", lambda: cfg_prep)
     dummy_pdf = tmp_path / "resume.pdf"
@@ -507,6 +508,8 @@ async def test_react_select_combobox_extraction_and_fill(tmp_path):
 @pytest.mark.asyncio
 async def test_recheck_website_skip_tailor_does_not_call_llm(monkeypatch, tmp_path):
     """Verifies tapping 'Re-check Website' reuses existing tailored PDF without re-tailoring."""
+    from contextlib import contextmanager
+
     from src.hitl import telegram_bot as tg
 
     dummy_pdf = tmp_path / "existing.pdf"
@@ -525,9 +528,38 @@ async def test_recheck_website_skip_tailor_does_not_call_llm(monkeypatch, tmp_pa
     async def _fake_upsert(**kwargs):
         return 1234
 
+    class _FakeCur:
+        def execute(self, sql, params=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class _FakeConn:
+        def cursor(self):
+            return _FakeCur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    @contextmanager
+    def _fake_conn():
+        yield _FakeConn()
+
     monkeypatch.setattr(tg, "tailor_resume_for_job", _fail_if_tailored)
     monkeypatch.setattr("src.orchestrator.graph.run_apply_agent_graph", _fake_apply_graph)
     monkeypatch.setattr(tg, "upsert_job_rich_card", _fake_upsert)
+    monkeypatch.setattr(tg, "get_connection", _fake_conn)
+    monkeypatch.setattr(tg, "create_apply_confirmation", lambda *a, **k: ("mock-token", None))
 
     job_row = {
         "id": 3983,

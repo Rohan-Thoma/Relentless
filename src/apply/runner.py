@@ -304,10 +304,11 @@ async def prepare_application(job: dict[str, Any] | int) -> dict[str, Any]:
                         "UPDATE jobs SET apply_feasible=FALSE, apply_blocker=%s, apply_state='MANUAL_APPLY' WHERE id=%s;",
                         (blocker, job["id"]),
                     )
-                    cur.execute(
-                        "INSERT INTO apply_events (job_id, attempt, router_path, mode, status, error, started_at, finished_at) VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW());",
-                        (job["id"], 1, r_path, "PREPARE", "ESCALATED", blocker),
-                    )
+                    if cur.rowcount:
+                        cur.execute(
+                            "INSERT INTO apply_events (job_id, attempt, router_path, mode, status, error, started_at, finished_at) VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW());",
+                            (job["id"], 1, r_path, "PREPARE", "ESCALATED", blocker),
+                        )
                     conn.commit()
             await asyncio.to_thread(_save_manual)
         return {
