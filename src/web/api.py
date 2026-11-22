@@ -344,8 +344,16 @@ async def _handle_job_routes(
 
     if sub == "action":
         action = str(body.get("action") or "").strip()
+        reason_category = body.get("reason_category")
+        reason_note = body.get("reason_note")
         try:
-            res = await service.record_job_action(job_id, action, actor_source="web")
+            res = await service.record_job_action(
+                job_id,
+                action,
+                actor_source="web",
+                reason_category=str(reason_category).strip() if reason_category else None,
+                reason_note=str(reason_note).strip() if reason_note else None,
+            )
         except ValueError as e:
             await _send_json(send, 400, {"ok": False, "error": str(e)})
             return True
@@ -429,9 +437,98 @@ async def _handle_okf_eval_settings_routes(
         await _send_json(send, 200, data, head_only=head_only)
         return True
 
+    if path == "/api/eval/experiments" and method in ("GET", "HEAD"):
+        exps = await service.async_list_experiments()
+        await _send_json(send, 200, {"ok": True, "experiments": exps}, head_only=head_only)
+        return True
+
+    if path == "/api/eval/experiments/start" and method == "POST":
+        raw = await _read_body(receive)
+        body, err = _parse_json_body(raw)
+        if err:
+            await _send_json(send, 400, {"ok": False, "error": err})
+            return True
+        params = body.get("params") if isinstance(body, dict) and isinstance(body.get("params"), dict) else (body if isinstance(body, dict) else {})
+        exp = await service.async_start_experiment(params)
+        await _send_json(send, 200, {"ok": True, "experiment": exp})
+        return True
+
+    if path.startswith("/api/eval/experiments/") and path.endswith("/complete") and method == "POST":
+        mid = path.removeprefix("/api/eval/experiments/").removesuffix("/complete").strip("/")
+        try:
+            exp_id = int(mid)
+        except ValueError:
+            await _send_json(send, 400, {"ok": False, "error": "INVALID_EXPERIMENT_ID"})
+            return True
+        raw = await _read_body(receive)
+        body, err = _parse_json_body(raw)
+        if err:
+            await _send_json(send, 400, {"ok": False, "error": err})
+            return True
+        accept_val = body.get("accept") if isinstance(body, dict) and "accept" in body else None
+        try:
+            exp = await service.async_complete_experiment(exp_id, accept=accept_val)
+        except ValueError as e:
+            await _send_json(send, 404, {"ok": False, "error": str(e)})
+            return True
+        await _send_json(send, 200, {"ok": True, "experiment": exp})
+        return True
+
+    if path == "/api/eval/calibrate" and method == "POST":
+        raw = await _read_body(receive)
+        body, err = _parse_json_body(raw)
+        if err:
+            await _send_json(send, 400, {"ok": False, "error": err})
+            return True
+        min_n = int(body.get("min_n", 30)) if isinstance(body, dict) else 30
+        min_per_class = int(body.get("min_per_class", 10)) if isinstance(body, dict) else 10
+        res = await service.async_trigger_calibration(min_n=min_n, min_per_class=min_per_class)
+        await _send_json(send, 200, res)
+        return True
+
+    if path == "/api/models/catalog" and method in ("GET", "HEAD"):
+        refresh = (query.get("refresh") or ["0"])[0].lower() in ("1", "true", "yes")
+        data = await service.async_get_models_catalog(force=refresh)
+        await _send_json(send, 200, {"ok": True, **data}, head_only=head_only)
+        return True
+
+    if path == "/api/location-policy/test" and method == "POST":
+        raw = await _read_body(receive)
+        body, err = _parse_json_body(raw)
+        if err:
+            await _send_json(send, 400, {"ok": False, "error": err})
+            return True
+        if not isinstance(body, dict):
+            await _send_json(send, 400, {"ok": False, "error": "INVALID_BODY"})
+            return True
+        try:
+            res = await service.async_test_location_policy(body)
+        except (TypeError, ValueError) as e:
+            await _send_json(send, 400, {"ok": False, "error": str(e)})
+            return True
+        await _send_json(send, 200, res)
+        return True
+
     if path == "/api/settings" and method in ("GET", "HEAD"):
         data = await service.async_get_user_settings()
         await _send_json(send, 200, data, head_only=head_only)
+        return True
+
+    if path == "/api/settings/preset" and method == "POST":
+        raw = await _read_body(receive)
+        body, err = _parse_json_body(raw)
+        if err:
+            await _send_json(send, 400, {"ok": False, "error": err})
+            return True
+        if not isinstance(body, dict) or not body.get("preset"):
+            await _send_json(send, 400, {"ok": False, "error": "MISSING_PRESET"})
+            return True
+        try:
+            res = await service.async_apply_preset_and_save(str(body["preset"]))
+        except ValueError as e:
+            await _send_json(send, 400, {"ok": False, "error": str(e)})
+            return True
+        await _send_json(send, 200, res)
         return True
 
     if path == "/api/settings/profile-template" and method in ("GET", "HEAD"):

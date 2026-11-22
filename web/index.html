@@ -524,12 +524,13 @@
                 <input type="text" id="okf-search" class="hud-input" placeholder="Search concepts, skills, scam patterns, company notes..." />
                 <select id="okf-type-filter" class="hud-select">
                   <option value="">All Concept Types</option>
-                  <option value="Preference">Preference</option>
+                  <option value="Candidate Preference">Candidate Preference</option>
+                  <option value="Market Intelligence">Market Intelligence</option>
+                  <option value="Resume Win">Resume Win</option>
                   <option value="Scam Pattern">Scam Pattern</option>
-                  <option value="Market Signal">Market Signal</option>
-                  <option value="Market Insight">Market Insight</option>
-                  <option value="Strategy">Strategy</option>
                   <option value="Company Note">Company Note</option>
+                  <option value="Strategy">Strategy</option>
+                  <option value="Preference">Preference (Legacy)</option>
                 </select>
                 <button class="btn btn-purple" id="btn-okf-search">🔍 QUERY BRAIN</button>
               </div>
@@ -600,6 +601,8 @@
               <p class="view-sub">Ground-truth Precision@K, 95% Wilson Confidence Intervals, Brier Calibration, and ATS channel yield.</p>
             </div>
             <div class="view-actions">
+              <button class="btn btn-outline" id="btn-eval-start-exp">🧪 START EXPERIMENT</button>
+              <button class="btn btn-lime" id="btn-eval-calibrate">📐 FIT CALIBRATION</button>
               <button class="btn btn-purple" id="btn-eval-refresh">↻ RECOMPUTE METRICS</button>
             </div>
           </div>
@@ -639,6 +642,17 @@
                 <span class="mono-tag">PER-SOURCE BREAKDOWN</span>
               </div>
               <div class="card-body" id="eval-source-table"></div>
+            </div>
+
+            <div class="hud-card">
+              <div class="card-header">
+                <span class="card-title">TRACKED A/B EXPERIMENTS &amp; CALIBRATION MODEL</span>
+                <span class="mono-tag">experiments / calibration_models</span>
+              </div>
+              <div class="card-body">
+                <div id="eval-calibration-box" style="margin-bottom:14px;"></div>
+                <div id="eval-experiments-table"></div>
+              </div>
             </div>
 
             <div class="hud-card">
@@ -849,14 +863,114 @@
                 <button type="submit" class="btn btn-lime" id="btn-save-engine-form">💾 SAVE ENGINE CONFIG</button>
               </div>
               <div class="card-body hud-form">
-                <div class="form-section-title"><span>1. AUTOMATION &amp; SUBMISSION GUARDRAILS</span></div>
+                <div class="form-section-title">
+                  <span>0. AI MODELS &amp; EMBEDDINGS PICKER (OPENAI / OPENROUTER)</span>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <span class="mono-tag" id="ec-model-keys-badge">CHECKING KEYS...</span>
+                    <button type="button" class="btn btn-sm btn-outline" id="btn-ec-refresh-models">↻ DISCOVER LIVE MODELS</button>
+                  </div>
+                </div>
+                <div class="form-grid-2">
+                  <div class="repeatable-card">
+                    <div class="repeatable-head"><span class="mono-tag">RESUME TAILORING MODEL</span></div>
+                    <div class="form-grid-2">
+                      <label class="field">
+                        <span>PROVIDER</span>
+                        <select id="ec-mod-tailor-provider" class="hud-select">
+                          <option value="openai">OpenAI (OPENAI_API_KEY)</option>
+                          <option value="openrouter">OpenRouter (OPENROUTER_API_KEY)</option>
+                        </select>
+                      </label>
+                      <label class="field">
+                        <span>MODEL</span>
+                        <select id="ec-mod-tailor-select" class="hud-select"></select>
+                      </label>
+                    </div>
+                    <label class="field" style="margin-top:8px;">
+                      <span>CUSTOM MODEL ID (OVERRIDES DROPDOWN IF TYPED)</span>
+                      <input type="text" id="ec-mod-tailor-custom" class="hud-input mono" placeholder="e.g. gpt-4o or anthropic/claude-sonnet-4" />
+                    </label>
+                  </div>
+
+                  <div class="repeatable-card">
+                    <div class="repeatable-head"><span class="mono-tag">VISION BROWSER AGENT MODEL</span></div>
+                    <div class="form-grid-2">
+                      <label class="field">
+                        <span>PROVIDER</span>
+                        <select id="ec-mod-browser-provider" class="hud-select">
+                          <option value="openai">OpenAI (OPENAI_API_KEY)</option>
+                          <option value="openrouter">OpenRouter (OPENROUTER_API_KEY)</option>
+                        </select>
+                      </label>
+                      <label class="field">
+                        <span>MODEL</span>
+                        <select id="ec-mod-browser-select" class="hud-select"></select>
+                      </label>
+                    </div>
+                    <label class="field" style="margin-top:8px;">
+                      <span>CUSTOM MODEL ID (OPTIONAL)</span>
+                      <input type="text" id="ec-mod-browser-custom" class="hud-input mono" placeholder="e.g. gpt-4o" />
+                    </label>
+                  </div>
+
+                  <div class="repeatable-card">
+                    <div class="repeatable-head"><span class="mono-tag">PGVECTOR EMBEDDINGS MODEL (1536D)</span></div>
+                    <div class="form-grid-2">
+                      <label class="field">
+                        <span>PROVIDER</span>
+                        <select id="ec-mod-embed-provider" class="hud-select">
+                          <option value="openai">OpenAI (OPENAI_API_KEY)</option>
+                          <option value="openrouter">OpenRouter (OPENROUTER_API_KEY)</option>
+                        </select>
+                      </label>
+                      <label class="field">
+                        <span>MODEL</span>
+                        <select id="ec-mod-embed-select" class="hud-select"></select>
+                      </label>
+                    </div>
+                    <label class="field" style="margin-top:8px;">
+                      <span>CUSTOM EMBEDDING MODEL ID (OPTIONAL)</span>
+                      <input type="text" id="ec-mod-embed-custom" class="hud-input mono" placeholder="e.g. text-embedding-3-small" />
+                    </label>
+                  </div>
+
+                  <div class="repeatable-card">
+                    <div class="repeatable-head"><span class="mono-tag">SYSTEM-1 TRIAGE &amp; CREDIBILITY AUDIT</span></div>
+                    <div class="form-grid-2">
+                      <label class="field">
+                        <span>PROVIDER</span>
+                        <select id="ec-mod-triage-provider" class="hud-select">
+                          <option value="openrouter">OpenRouter Decisions (OPENROUTER_API_KEY)</option>
+                          <option value="typesafe">TypeSafe Direct (TYPESAFE_API_KEY)</option>
+                        </select>
+                      </label>
+                      <label class="field">
+                        <span>MODEL</span>
+                        <select id="ec-mod-triage-select" class="hud-select"></select>
+                      </label>
+                    </div>
+                    <label class="field" style="margin-top:8px;">
+                      <span>CUSTOM TRIAGE MODEL ID (OPTIONAL)</span>
+                      <input type="text" id="ec-mod-triage-custom" class="hud-input mono" placeholder="e.g. typesafe/jev-1.14" />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="form-section-title">
+                  <span>1. AUTOMATION PRESETS &amp; SUBMISSION GUARDRAILS</span>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-sm btn-outline" data-apply-preset="safe">🛡 PRESET: SAFE</button>
+                    <button type="button" class="btn btn-sm btn-purple" data-apply-preset="balanced">⚖ PRESET: BALANCED</button>
+                    <button type="button" class="btn btn-sm btn-warn" data-apply-preset="fast">⚡ PRESET: FAST</button>
+                  </div>
+                </div>
                 <div class="form-grid-3">
                   <label class="field">
                     <span>APPLY MODE</span>
                     <select id="ec-auto-apply-mode" class="hud-select">
-                      <option value="DRY_RUN">DRY_RUN (Fill &amp; capture screenshots only)</option>
-                      <option value="AUTO_CONFIRM">AUTO_CONFIRM (Submit only after confirm)</option>
-                      <option value="MANUAL">MANUAL (No auto form execution)</option>
+                      <option value="PREPARE_ONLY">PREPARE_ONLY (Pre-fill &amp; capture screenshots; never submits)</option>
+                      <option value="CONFIRM_SUBMIT">CONFIRM_SUBMIT (Submit ONLY after explicit 1-tap confirm)</option>
+                      <option value="MANUAL_ONLY">MANUAL_ONLY (Tailor PDFs only; zero browser automation)</option>
                     </select>
                   </label>
                   <label class="field">
@@ -872,7 +986,11 @@
                     <input type="number" id="ec-auto-min-fit" class="hud-input" min="0" max="1" step="0.01" />
                   </label>
                   <label class="field">
-                    <span>MAX FREE-TEXT QUESTIONS</span>
+                    <span>MAX SCAM PROBABILITY (0.0 – 1.0)</span>
+                    <input type="number" id="ec-auto-max-scam" class="hud-input" min="0" max="1" step="0.01" />
+                  </label>
+                  <label class="field">
+                    <span>MAX REQUIRED ESSAY QUESTIONS</span>
                     <input type="number" id="ec-auto-max-free" class="hud-input" min="0" />
                   </label>
                 </div>
@@ -882,13 +1000,58 @@
                 </div>
                 <div class="checkbox-row">
                   <label class="checkbox-field"><input type="checkbox" id="ec-auto-first-confirm" /> Require First-Company Confirmation</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-auto-headful" /> Allow Local Headful Handoff (CAPTCHA/Login)</label>
                   <label class="checkbox-field"><input type="checkbox" id="ec-tier-dream" /> Tier: dream_role</label>
                   <label class="checkbox-field"><input type="checkbox" id="ec-tier-strong" /> Tier: strong_fit</label>
                   <label class="checkbox-field"><input type="checkbox" id="ec-tier-moderate" /> Tier: moderate_fit</label>
                   <label class="checkbox-field"><input type="checkbox" id="ec-tier-weak" /> Tier: weak_fit</label>
                 </div>
 
-                <div class="form-section-title"><span>2. CANDIDATE TARGETING PREFERENCES</span></div>
+                <div class="form-section-title">
+                  <span>2. COMPOSABLE LOCATION &amp; WORK-MODE POLICY (OR / AND / XOR)</span>
+                  <button type="button" class="btn btn-sm btn-purple" id="btn-ec-add-loc-rule">+ ADD LOCATION RULE</button>
+                </div>
+                <div class="form-grid-3">
+                  <label class="field">
+                    <span>RULE COMBINATOR OPERATOR</span>
+                    <select id="ec-lp-operator" class="hud-select">
+                      <option value="OR">OR (Match any rule)</option>
+                      <option value="AND">AND (Must satisfy ALL rules)</option>
+                      <option value="XOR">XOR (Match strictly ONE rule)</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>CANDIDATE COUNTRY</span>
+                    <input type="text" id="ec-lp-country" class="hud-input" placeholder="india / us / uk" />
+                  </label>
+                  <label class="checkbox-field" style="align-self:end;padding-bottom:10px;">
+                    <input type="checkbox" id="ec-lp-check-jd" checked /> Enforce JD Geo/Auth &amp; 5-Day-Onsite Blockers
+                  </label>
+                </div>
+                <div class="field">
+                  <span>REJECTED GEO-RESTRICTED COUNTRIES / REGIONS (e.g. us, uk, eu, canada, emea)</span>
+                  <div class="tag-box" id="ec-lp-reject-box" data-tag-box="ec-lp-reject-box" data-tag-label="Rejected Countries"></div>
+                </div>
+                <div id="ec-lp-rules-list" class="repeatable-list"></div>
+
+                <div class="repeatable-card" style="margin-top:10px;">
+                  <div class="repeatable-head">
+                    <span class="mono-tag">LIVE LOCATION POLICY DRY-TESTER</span>
+                    <button type="button" class="btn btn-sm btn-lime" id="btn-ec-test-loc">▶ TEST POLICY NOW</button>
+                  </div>
+                  <div class="form-grid-3">
+                    <label class="field"><span>SAMPLE JOB TITLE</span><input type="text" id="ec-lp-test-title" class="hud-input" placeholder="AI Engineer" /></label>
+                    <label class="field"><span>SAMPLE LOCATION</span><input type="text" id="ec-lp-test-location" class="hud-input" placeholder="Remote (Worldwide) / Indianapolis, IN / Hyderabad" /></label>
+                    <label class="checkbox-field" style="align-self:end;padding-bottom:10px;"><input type="checkbox" id="ec-lp-test-remote" /> Board reports is_remote=true</label>
+                  </div>
+                  <label class="field" style="margin-top:8px;">
+                    <span>SAMPLE JD SNIPPET (OPTIONAL — TESTS WORK-AUTH / 5-DAY-ONSITE BLOCKERS)</span>
+                    <input type="text" id="ec-lp-test-jd" class="hud-input" placeholder="e.g. Must be authorized to work in the United States." />
+                  </label>
+                  <div id="ec-lp-test-output" class="muted-copy mono" style="margin-top:8px;font-size:12px;">Enter a sample location and click TEST POLICY NOW to verify how your active rules behave.</div>
+                </div>
+
+                <div class="form-section-title"><span>3. CANDIDATE TARGETING PREFERENCES</span></div>
                 <div class="form-grid-3">
                   <div class="field">
                     <span>TARGET ROLE KEYWORDS</span>
@@ -898,26 +1061,35 @@
                     <span>EXCLUDE TITLE KEYWORDS</span>
                     <div class="tag-box" id="ec-pref-excludes-box" data-tag-box="ec-pref-excludes-box" data-tag-label="Exclude Title Keywords"></div>
                   </div>
-                  <div class="field">
-                    <span>ALLOWED LOCATIONS</span>
-                    <div class="tag-box" id="ec-pref-locations-box" data-tag-box="ec-pref-locations-box" data-tag-label="Allowed Locations"></div>
-                  </div>
+                  <label class="field">
+                    <span>MAX REQUIRED EXPERIENCE (YEARS)</span>
+                    <input type="number" id="ec-pref-max-exp" class="hud-input" min="0" max="30" placeholder="e.g. 6" />
+                  </label>
+                </div>
+                <div class="field">
+                  <span>LEGACY ALLOWED LOCATIONS (FALLBACK ONLY IF LOCATION POLICY IS EMPTY)</span>
+                  <div class="tag-box" id="ec-pref-locations-box" data-tag-box="ec-pref-locations-box" data-tag-label="Allowed Locations"></div>
                 </div>
 
-                <div class="form-section-title"><span>3. INGESTION &amp; TRIAGE PIPELINE</span></div>
-                <div class="form-grid-2">
+                <div class="form-section-title"><span>4. INGESTION &amp; TRIAGE PIPELINE</span></div>
+                <div class="form-grid-3">
                   <label class="field"><span>TRIAGE CONCURRENCY</span><input type="number" id="ec-ing-concurrency" class="hud-input" min="1" max="20" /></label>
                   <label class="field"><span>MAX JOB AGE (DAYS)</span><input type="number" id="ec-ing-max-age" class="hud-input" min="1" /></label>
+                  <label class="field"><span>JOBBOARDS INTERVAL (MIN)</span><input type="number" id="ec-ing-jb-interval" class="hud-input" min="5" /></label>
+                  <label class="field"><span>ATS POLL INTERVAL (MIN)</span><input type="number" id="ec-ing-ats-interval" class="hud-input" min="15" /></label>
+                  <label class="field"><span>WORKDAY INTERVAL (MIN)</span><input type="number" id="ec-ing-wd-interval" class="hud-input" min="60" /></label>
                 </div>
                 <div class="checkbox-row">
-                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-prioritize" /> Prioritize Scraping</label>
-                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-scrape-only" /> Scrape Only (Skip Triage/Notify)</label>
-                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-ats" /> Enable ATS Pollers</label>
-                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-jobboards" /> Enable Jobboards Poller</label>
-                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-gmail" /> Enable Gmail Alerts Scanner</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-jobboards" /> Enable Jobboards Poller (JobSpy)</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-gmail" /> Enable Gmail Alerts Scanner (Label-Only)</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-ats" /> Enable Direct ATS Boards (GH/Lever/Ashby/SR/Recruitee)</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-remote-feeds" /> Enable Public Remote Feeds (Remotive/Arbeitnow)</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-enable-workday" /> Enable Bounded Workday CXS (Opt-in)</label>
+                  <label class="checkbox-field"><input type="checkbox" id="ec-ing-scrape-only" /> Fast Mode: Skip Direct ATS (Jobboards + Gmail Only)</label>
+                  <label class="checkbox-field hidden"><input type="checkbox" id="ec-ing-prioritize" /> Prioritize Scraping (Legacy)</label>
                 </div>
 
-                <div class="form-section-title"><span>4. JOBBOARDS &amp; GMAIL SCANNER</span></div>
+                <div class="form-section-title"><span>5. JOBBOARDS &amp; GMAIL SCANNER</span></div>
                 <div class="form-grid-3">
                   <div class="field">
                     <span>JOBBOARD SITES</span>
@@ -1127,11 +1299,11 @@
               </div>
               <div class="card-body">
                 <ol class="guide-list">
-                  <li><strong>Discovery (<code>DISCOVERED</code>):</strong> Polls Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Jobboards, and Gmail alerts with SHA-256 deduplication into Neon PostgreSQL.</li>
-                  <li><strong>System-1 Jev Triage:</strong> Evaluates scam risk, fit tier (<code>dream_role</code> to <code>reject</code>), calibrated fit probability, and persona match against your <code>master_profile</code>.</li>
-                  <li><strong>Resume Synthesis &amp; ATS Scorecard:</strong> Clicking <code>🎯 Tailor</code> generates a surgical diff + Typst PDF and computes Before/After ATS keyword match scores.</li>
-                  <li><strong>Playwright Form Pre-Check (<code>READY_FOR_REVIEW</code>):</strong> Inspects the target ATS portal and captures live form screenshots before any submission happens.</li>
-                  <li><strong>Human Confirmation &amp; Submit (<code>APPLIED</code> → <code>CALLBACK</code>):</strong> Nothing submits without explicit confirmation via Web or Telegram.</li>
+                  <li><strong>Watermarked Discovery (<code>DISCOVERED</code>):</strong> Polls Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee, public remote feeds, JobSpy, and label-only Gmail alerts with 3x-404 auto-pruning, composable <code>OR/AND/XOR</code> Location Policy, and <code>pgvector</code> semantic dedupe.</li>
+                  <li><strong>LangGraph TriageGraph:</strong> Computes 1536d embeddings, retrieves top-K OKF Brain concepts via semantic RAG, runs System-1 Jev scoring against your full profile &amp; Location Policy, and gates cleanly without calibration spirals.</li>
+                  <li><strong>LangGraph TailorGraph:</strong> Passes the full untruncated JD to your selected model (default <code>gpt-4o</code>), preserves metrics &amp; multi-page depth, self-refines on dropped skills, runs fail-loud Jev credibility audit, and computes an honest un-clamped ATS scorecard.</li>
+                  <li><strong>LangGraph ApplyAgentGraph (<code>READY_FOR_REVIEW</code>):</strong> Fast-skips LinkedIn/Naukri/Workday shells, ignores nav search bars, enforces <code>max_free_text_questions</code>, and pauses cleanly at a Human Handoff Gate on CAPTCHAs/logins.</li>
+                  <li><strong>Structured Feedback &amp; Calibration (<code>APPLIED</code> → <code>CALLBACK</code>):</strong> Structured skip reasons filter out expired links/busy days so OKF Brain and LOOCV-validated PAVA calibration only learn durable career signals.</li>
                 </ol>
               </div>
             </div>
@@ -1234,6 +1406,41 @@
           <div class="form-actions">
             <button type="button" class="btn btn-danger" id="btn-auth-logout">🔒 LOCK &amp; LOGOUT</button>
             <button type="submit" class="btn btn-lime" id="btn-auth-submit">UPDATE &amp; VERIFY</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Structured Skip Reason Modal (Intelligent Learning Gate) -->
+  <div class="modal-backdrop hidden" id="skip-modal" role="dialog" aria-modal="true" aria-labelledby="skip-modal-title">
+    <div class="hud-card modal-card">
+      <div class="card-header">
+        <span class="card-title" id="skip-modal-title">SKIP JOB — SELECT REASON</span>
+        <button class="btn btn-sm btn-outline" id="btn-close-skip">✕</button>
+      </div>
+      <div class="card-body">
+        <form id="skip-modal-form" class="hud-form">
+          <p class="muted-copy" id="skip-modal-summary">Tell Relentless why you are skipping this role so the OKF Brain only learns durable preferences and ignores expired links or busy days.</p>
+          <label class="field">
+            <span>SKIP REASON CATEGORY</span>
+            <select id="skip-reason-select" class="hud-select">
+              <option value="BAD_MATCH_EXPERIENCE">📉 Experience / Seniority Mismatch (OKF Learns)</option>
+              <option value="BAD_MATCH_SKILLS">🛠️ Wrong Tech Stack / Domain (OKF Learns)</option>
+              <option value="BAD_MATCH_LOCATION">📍 Wrong Location / Not Truly Remote (OKF Learns)</option>
+              <option value="EXPIRED_OR_CLOSED">⏰ Job Link Already Expired / Closed (Excluded from Learning)</option>
+              <option value="SCAM_OR_BAD_COMPANY">🚫 Scam / Ghost / Avoid Company (OKF Learns)</option>
+              <option value="BUSY_OR_OTHER">✍️ Busy / Personal / Custom Reason (Auto-detected from note)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>OPTIONAL CUSTOM NOTE (EXPLAIN WHY — SYSTEM LEARNS INTENT)</span>
+            <textarea id="skip-reason-note" class="hud-textarea" rows="3" placeholder="e.g. Requires 8+ years Java or Link returned 404 / busy today..."></textarea>
+          </label>
+          <div id="skip-learning-hint" class="mono-tag">🧠 INTELLIGENT LEARNING GATE: WILL TEACH OKF BRAIN</div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-outline" id="btn-cancel-skip">CANCEL</button>
+            <button type="submit" class="btn btn-danger" id="btn-confirm-skip">🗑 CONFIRM SKIP</button>
           </div>
         </form>
       </div>

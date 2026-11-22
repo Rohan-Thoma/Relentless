@@ -59,13 +59,14 @@ const state = {
   // Eval & Config state
   evalData: null,
   settingsData: null,
+  modelCatalog: null,
+  pendingSkip: null,
   logsState: {
     level: "ALL",
     query: "",
     live: true,
     data: null,
   },
-  settingsData: null,
   profileFormLoadedOnce: false,
   engineFormLoadedOnce: false,
 
@@ -1448,7 +1449,11 @@ function renderStudioLeftPane(job) {
   const matched = sc.matched_skills_after || [];
   const added = sc.newly_added_terms || [];
   const missing = sc.missing_jd_skills || [];
+  const bridged = sc.adjacent_bridged_skills || [];
+  const stretch = sc.unverified_stretch_skills || [];
+  const dropped = sc.dropped_jd_skills || [];
   const editNotes = job.user_edit_notes || [];
+  const boostVal = sc.boost_pct !== undefined ? `${sc.boost_pct >= 0 ? "+" : ""}${sc.boost_pct}%` : "";
 
   container.innerHTML = `
     <div class="scorecard-grid">
@@ -1457,8 +1462,8 @@ function renderStudioLeftPane(job) {
         <div class="mini-stat-val text-lime">${pct(job.jev_fit_prob_cal ?? job.jev_fit_prob, 1)}</div>
       </div>
       <div class="mini-stat">
-        <div class="mini-stat-label">BASELINE COSINE</div>
-        <div class="mini-stat-val">${pct(job.cosine_sim, 1)}</div>
+        <div class="mini-stat-label">SEMANTIC / BASELINE</div>
+        <div class="mini-stat-val">${pct(job.embedding_sim ?? job.cosine_sim, 1)}</div>
       </div>
       <div class="mini-stat">
         <div class="mini-stat-label">SCAM PROB</div>
@@ -1469,12 +1474,12 @@ function renderStudioLeftPane(job) {
         <div class="mini-stat-val text-purple" style="font-size:12px;">${esc(job.jev_persona || "—")}</div>
       </div>
       <div class="mini-stat">
-        <div class="mini-stat-label">ATS BEFORE → AFTER</div>
-        <div class="mini-stat-val text-lime">${sc.overall_before_pct !== undefined ? `${sc.overall_before_pct}% → ${sc.overall_after_pct}%` : "—"}</div>
+        <div class="mini-stat-label">HONEST ATS (BEFORE → AFTER)</div>
+        <div class="mini-stat-val text-lime">${sc.overall_before_pct !== undefined ? `${sc.overall_before_pct}% → ${sc.overall_after_pct}% (${boostVal})` : "—"}</div>
       </div>
       <div class="mini-stat">
-        <div class="mini-stat-label">IMPACT DENSITY</div>
-        <div class="mini-stat-val text-purple">${sc.impact_density_pct !== undefined ? `${sc.impact_density_pct}%` : "—"}</div>
+        <div class="mini-stat-label">IMPACT / AUDIT</div>
+        <div class="mini-stat-val text-purple">${sc.impact_density_pct !== undefined ? `${sc.impact_density_pct}%` : "—"}${sc.audit_status ? ` · ${esc(sc.audit_status)}` : ""}</div>
       </div>
     </div>
 
@@ -1491,14 +1496,44 @@ function renderStudioLeftPane(job) {
     }
 
     ${
-      matched.length || added.length || missing.length
+      matched.length || added.length || missing.length || bridged.length || stretch.length
         ? `
       <div class="kw-group">
-        <div class="kw-group-title">MATCHED ATS SKILLS (${matched.length})</div>
+        <div class="kw-group-title">VERIFIED MATCHED ATS SKILLS (${matched.length})</div>
         <div class="kw-list">
           ${matched.map((k) => `<span class="badge badge-lime">${esc(k)}</span>`).join("") || `<span class="muted-copy">None</span>`}
         </div>
       </div>
+      ${
+        bridged.length
+          ? `<div class="kw-group">
+              <div class="kw-group-title">ADJACENT ECOSYSTEM BRIDGES (${bridged.length})</div>
+              <div class="kw-list">
+                ${bridged.map((k) => `<span class="badge badge-purple">${esc(k)}</span>`).join("")}
+              </div>
+            </div>`
+          : ""
+      }
+      ${
+        stretch.length
+          ? `<div class="kw-group">
+              <div class="kw-group-title">UNVERIFIED STRETCH PLATFORMS — REVIEW BEFORE SUBMITTING (${stretch.length})</div>
+              <div class="kw-list">
+                ${stretch.map((k) => `<span class="badge badge-amber">${esc(k)}</span>`).join("")}
+              </div>
+            </div>`
+          : ""
+      }
+      ${
+        dropped.length
+          ? `<div class="kw-group">
+              <div class="kw-group-title">WARNING: DROPPED PROFILE SKILLS (${dropped.length})</div>
+              <div class="kw-list">
+                ${dropped.map((k) => `<span class="badge badge-red">${esc(k)}</span>`).join("")}
+              </div>
+            </div>`
+          : ""
+      }
       <div class="kw-group">
         <div class="kw-group-title">NEWLY INJECTED ATS TERMS (${added.length})</div>
         <div class="kw-list">
@@ -1626,17 +1661,75 @@ async function triggerJobInterest(jobId) {
   }
 }
 
-async function triggerJobAction(jobId, action) {
+async function triggerJobAction(jobId, action, opts = {}) {
   try {
-    await apiFetch(`/api/jobs/${jobId}/action`, {
+    const body = { action };
+    if (opts.reason_category) body.reason_category = opts.reason_category;
+    if (opts.reason_note) body.reason_note = opts.reason_note;
+    const res = await apiFetch(`/api/jobs/${jobId}/action`, {
       method: "POST",
-      body: { action },
+      body,
     });
-    toast(`Job #${jobId} marked as ${action}`);
+    const extra = res.learning_reason ? ` — ${res.learning_reason}` : "";
+    toast(`Job #${jobId} marked as ${action}${extra}`);
     await refreshTelemetryAndActiveView();
   } catch (err) {
     toast(`Action failed: ${err.message}`, "error");
   }
+}
+
+function updateSkipLearningHint() {
+  const cat = $("skip-reason-select") ? $("skip-reason-select").value : "BAD_MATCH_SKILLS";
+  const note = ($("skip-reason-note") ? $("skip-reason-note").value : "").trim().toLowerCase();
+  const hint = $("skip-learning-hint");
+  if (!hint) return;
+  if (cat === "EXPIRED_OR_CLOSED") {
+    hint.textContent = "🧹 LEARNING GATE: EPHEMERAL — EXCLUDED FROM OKF BRAIN & CALIBRATION";
+  } else if (cat === "BUSY_OR_OTHER") {
+    const ephemeral = /\b(expired|closed|404|busy|later|duplicate|accidental)\b/.test(note);
+    const durable = /\b(intern|senior|junior|years|experience|onsite|hybrid|remote|salary|ctc|stack|java|frontend|scam|avoid|prefer)\b/.test(note);
+    if (durable || (!ephemeral && note.split(/\s+/).filter(Boolean).length >= 4)) {
+      hint.textContent = "🧠 LEARNING GATE: CUSTOM NOTE HAS DURABLE SIGNAL — WILL TEACH OKF BRAIN";
+    } else {
+      hint.textContent = "🧹 LEARNING GATE: TRANSIENT SKIP — WILL NOT POLLUTE OKF BRAIN";
+    }
+  } else {
+    hint.textContent = "🧠 LEARNING GATE: DURABLE SIGNAL — WILL TEACH OKF BRAIN";
+  }
+}
+
+function openSkipModal(jobId, defaultAction) {
+  state.pendingSkip = { jobId: Number(jobId), action: defaultAction || "SKIP_BAD_FIT" };
+  if ($("skip-modal-title")) {
+    $("skip-modal-title").textContent = `SKIP JOB #${jobId} — SELECT REASON`;
+  }
+  if ($("skip-reason-select")) {
+    $("skip-reason-select").value = defaultAction === "SKIP_SCAM" ? "SCAM_OR_BAD_COMPANY" : "BAD_MATCH_SKILLS";
+  }
+  if ($("skip-reason-note")) {
+    $("skip-reason-note").value = "";
+  }
+  updateSkipLearningHint();
+  if ($("skip-modal")) $("skip-modal").classList.remove("hidden");
+}
+
+function closeSkipModal() {
+  state.pendingSkip = null;
+  if ($("skip-modal")) $("skip-modal").classList.add("hidden");
+}
+
+async function confirmSkipModal(ev) {
+  ev.preventDefault();
+  if (!state.pendingSkip) return;
+  const { jobId } = state.pendingSkip;
+  const reasonCategory = $("skip-reason-select").value;
+  const reasonNote = $("skip-reason-note").value.trim();
+  const finalAction = reasonCategory === "SCAM_OR_BAD_COMPANY" ? "SKIP_SCAM" : "SKIP_BAD_FIT";
+  closeSkipModal();
+  await triggerJobAction(jobId, finalAction, {
+    reason_category: reasonCategory,
+    reason_note: reasonNote || null,
+  });
 }
 
 async function sendStudioEdit() {
@@ -2510,6 +2603,56 @@ function renderEvalDashboard(ev) {
     `
     : `<div class="muted-copy">No labeled jobs across ATS sources yet.</div>`;
 
+  const calBox = $("eval-calibration-box");
+  if (calBox) {
+    const cal = ev.active_calibration;
+    calBox.innerHTML = cal
+      ? `<div class="task-item">
+          <div>
+            <span class="badge badge-lime">ACTIVE PAVA MODEL</span>
+            <span class="mono" style="margin-left:8px;">n=${esc(cal.n)} · method=${esc(cal.method || "pava")} · metrics=${esc(JSON.stringify(cal.metrics || {}))}</span>
+          </div>
+          <span class="mono-tag">RANKING ONLY (NO GATE SPIRAL)</span>
+        </div>`
+      : `<div class="muted-copy">No active persisted calibration model yet. Collect at least 30 balanced labels (10+ Applied &amp; 10+ Skipped, excluding expired links) and click <strong>📐 FIT CALIBRATION</strong>.</div>`;
+  }
+
+  const expBox = $("eval-experiments-table");
+  if (expBox) {
+    const exps = ev.experiments || [];
+    expBox.innerHTML = exps.length
+      ? `
+        <div class="hud-table-wrap">
+          <table class="hud-table">
+            <thead>
+              <tr><th>ID</th><th>STATUS</th><th>PARAMS / NOTE</th><th>BEFORE</th><th>AFTER</th><th>ACTION</th></tr>
+            </thead>
+            <tbody>
+              ${exps
+                .map(
+                  (e) => `
+                  <tr>
+                    <td class="mono">#${esc(e.id)}</td>
+                    <td><span class="badge ${e.status === "ACCEPTED" ? "badge-lime" : e.status === "RUNNING" ? "badge-purple" : "badge-amber"}">${esc(e.status)}</span></td>
+                    <td class="mono" style="font-size:11px;">${esc(JSON.stringify(e.params || {}))}</td>
+                    <td class="mono" style="font-size:11px;">${esc(JSON.stringify(e.before_metrics || {}))}</td>
+                    <td class="mono" style="font-size:11px;">${esc(JSON.stringify(e.after_metrics || {}))}</td>
+                    <td>${
+                      e.status === "RUNNING"
+                        ? `<button type="button" class="btn btn-sm btn-lime" data-complete-exp="${esc(e.id)}">✓ COMPLETE</button>`
+                        : "—"
+                    }</td>
+                  </tr>
+                `,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      `
+      : `<div class="muted-copy">No tracked experiments yet. Click <strong>🧪 START EXPERIMENT</strong> before changing prompts, models, or filters to measure real Precision@K &amp; Brier lift.</div>`;
+  }
+
   const hist = ev.history || [];
   $("eval-history-table").innerHTML = hist.length
     ? `
@@ -2540,16 +2683,210 @@ function renderEvalDashboard(ev) {
   $("eval-markdown-pre").textContent = ev.report_markdown || "No evaluation report generated.";
 }
 
+async function startNewExperiment() {
+  const note = window.prompt("Experiment label/hypothesis (e.g. 'Switched tailor to gpt-4.1 + strict remote policy'):", "Config tuning experiment");
+  if (note === null) return;
+  try {
+    const res = await apiFetch("/api/eval/experiments/start", {
+      method: "POST",
+      body: { params: { note: note.trim() || "manual experiment" } },
+    });
+    toast(`Started Experiment #${res.experiment.id}!`);
+    await loadEvalData();
+  } catch (err) {
+    toast(`Start experiment failed: ${err.message}`, "error");
+  }
+}
+
+async function completeExperimentById(expId) {
+  try {
+    const res = await apiFetch(`/api/eval/experiments/${expId}/complete`, {
+      method: "POST",
+      body: {},
+    });
+    toast(`Experiment #${expId} completed -> ${res.experiment.status}`);
+    await loadEvalData();
+  } catch (err) {
+    toast(`Complete experiment failed: ${err.message}`, "error");
+  }
+}
+
+async function triggerFitCalibration() {
+  try {
+    const res = await apiFetch("/api/eval/calibrate", {
+      method: "POST",
+      body: { min_n: 30, min_per_class: 10 },
+    });
+    toast(res.activated ? `Activated PAVA calibration model (n=${res.model.n})!` : (res.message || "Calibration skipped"), res.activated ? "info" : "warn");
+    await loadEvalData();
+  } catch (err) {
+    toast(`Calibration failed: ${err.message}`, "error");
+  }
+}
+
 // ==============================================================================
 // Config, Candidate Profile & Security Vault (View 6 — Structured Forms!)
 // ==============================================================================
+async function loadModelCatalog(force = false) {
+  try {
+    const res = await apiFetch(`/api/models/catalog${force ? "?refresh=1" : ""}`);
+    state.modelCatalog = res;
+    const badge = $("ec-model-keys-badge");
+    if (badge && res.providers) {
+      const parts = [];
+      parts.push(`OPENAI: ${res.providers.openai ? "✓" : "✕"}`);
+      parts.push(`OPENROUTER: ${res.providers.openrouter ? "✓" : "✕"}`);
+      if (res.providers.typesafe) parts.push("TYPESAFE: ✓");
+      badge.textContent = parts.join(" · ");
+    }
+    return res;
+  } catch (err) {
+    toast(`Model catalog refresh failed: ${err.message}`, "warn");
+    return state.modelCatalog;
+  }
+}
+
+function populateModelSelect(selectId, catalogBucket, provider, selectedModel, customInputId) {
+  const sel = $(selectId);
+  const customInp = $(customInputId);
+  if (!sel) return;
+  const cat = state.modelCatalog || {};
+  const list = (cat[catalogBucket] && cat[catalogBucket][provider]) || [];
+  sel.innerHTML = list
+    .map((m) => `<option value="${esc(m.id)}">${esc(m.label || m.id)}</option>`)
+    .join("");
+  const found = list.some((m) => m.id === selectedModel);
+  if (selectedModel && found) {
+    sel.value = selectedModel;
+    if (customInp) customInp.value = "";
+  } else if (selectedModel) {
+    const opt = document.createElement("option");
+    opt.value = selectedModel;
+    opt.textContent = `${selectedModel} (Current)`;
+    sel.appendChild(opt);
+    sel.value = selectedModel;
+    if (customInp) customInp.value = "";
+  }
+}
+
+function appendLocationRuleRow(rule = {}) {
+  const container = $("ec-lp-rules-list");
+  if (!container) return;
+  const idx = container.children.length + 1;
+  const modes = new Set((rule.work_modes || []).map((m) => String(m).toLowerCase()));
+  const card = document.createElement("div");
+  card.className = "repeatable-card ec-lp-rule-row";
+  card.innerHTML = `
+    <div class="repeatable-head">
+      <span class="mono-tag">LOCATION RULE #${idx}</span>
+      <button type="button" class="btn btn-sm btn-danger btn-remove-row">REMOVE RULE</button>
+    </div>
+    <div class="form-grid-3">
+      <label class="field">
+        <span>RULE NAME</span>
+        <input type="text" class="hud-input ec-lpr-name" value="${esc(rule.name || `rule_${idx}`)}" placeholder="e.g. remote_anywhere or hyderabad_hybrid" />
+      </label>
+      <label class="field">
+        <span>CITIES (COMMA-SEPARATED, OPTIONAL)</span>
+        <input type="text" class="hud-input ec-lpr-cities" value="${esc((rule.cities || []).join(", "))}" placeholder="e.g. hyderabad, bengaluru" />
+      </label>
+      <label class="field">
+        <span>COUNTRIES (COMMA-SEPARATED, OPTIONAL)</span>
+        <input type="text" class="hud-input ec-lpr-countries" value="${esc((rule.countries || []).join(", "))}" placeholder="e.g. india" />
+      </label>
+    </div>
+    <div class="form-grid-2" style="margin-top:8px;">
+      <label class="field">
+        <span>ALLOWED REMOTE REGIONS (COMMA-SEPARATED)</span>
+        <input type="text" class="hud-input ec-lpr-regions" value="${esc((rule.allowed_regions || []).join(", "))}" placeholder="anywhere, worldwide, global, india, apac" />
+      </label>
+      <div class="checkbox-row" style="align-self:end;padding-bottom:6px;">
+        <label class="checkbox-field"><input type="checkbox" class="ec-lpr-mode-remote" ${modes.has("remote") ? "checked" : ""} /> Remote</label>
+        <label class="checkbox-field"><input type="checkbox" class="ec-lpr-mode-hybrid" ${modes.has("hybrid") ? "checked" : ""} /> Hybrid</label>
+        <label class="checkbox-field"><input type="checkbox" class="ec-lpr-mode-onsite" ${modes.has("onsite") ? "checked" : ""} /> On-site</label>
+        <label class="checkbox-field"><input type="checkbox" class="ec-lpr-unspec" ${rule.allow_unspecified_remote !== false ? "checked" : ""} /> Allow bare "Remote"</label>
+      </div>
+    </div>
+  `;
+  container.appendChild(card);
+}
+
+function collectLocationPolicyFromForm() {
+  const splitCsv = (val) =>
+    String(val || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+  const rules = [...document.querySelectorAll(".ec-lp-rule-row")].map((row, idx) => {
+    const workModes = [];
+    if (row.querySelector(".ec-lpr-mode-remote").checked) workModes.push("remote");
+    if (row.querySelector(".ec-lpr-mode-hybrid").checked) workModes.push("hybrid");
+    if (row.querySelector(".ec-lpr-mode-onsite").checked) workModes.push("onsite");
+    return {
+      name: row.querySelector(".ec-lpr-name").value.trim() || `rule_${idx + 1}`,
+      work_modes: workModes,
+      cities: splitCsv(row.querySelector(".ec-lpr-cities").value),
+      countries: splitCsv(row.querySelector(".ec-lpr-countries").value),
+      allowed_regions: splitCsv(row.querySelector(".ec-lpr-regions").value),
+      allow_unspecified_remote: row.querySelector(".ec-lpr-unspec").checked,
+    };
+  });
+
+  return {
+    operator: ($("ec-lp-operator") ? $("ec-lp-operator").value : "OR") || "OR",
+    candidate_country: ($("ec-lp-country") ? $("ec-lp-country").value.trim().toLowerCase() : "india") || "india",
+    check_jd_geo_blockers: $("ec-lp-check-jd") ? $("ec-lp-check-jd").checked : true,
+    reject_countries: getTagBox("ec-lp-reject-box"),
+    rules,
+  };
+}
+
+async function runLocationPolicyTest() {
+  const out = $("ec-lp-test-output");
+  if (!out) return;
+  out.textContent = "Testing against current LocationPolicy rules...";
+  try {
+    const res = await apiFetch("/api/location-policy/test", {
+      method: "POST",
+      body: {
+        title: ($("ec-lp-test-title") && $("ec-lp-test-title").value.trim()) || "AI Engineer",
+        location: ($("ec-lp-test-location") && $("ec-lp-test-location").value.trim()) || "",
+        jd_text: ($("ec-lp-test-jd") && $("ec-lp-test-jd").value.trim()) || "",
+        is_remote: $("ec-lp-test-remote") && $("ec-lp-test-remote").checked ? true : null,
+        location_policy: collectLocationPolicyFromForm(),
+      },
+    });
+    const badge = res.accepted ? "✅ ACCEPTED" : "🚫 REJECTED";
+    const f = res.facts || {};
+    out.innerHTML = `<strong class="${res.accepted ? "text-lime" : "text-crimson"}">${badge}</strong> — ${esc(res.reason)}<br><span class="muted-copy">Extracted Facts: work_mode=${esc(f.work_mode)} | countries=[${esc((f.countries || []).join(", "))}] | cities=[${esc((f.cities || []).join(", "))}] | remote_regions=[${esc((f.remote_regions || []).join(", "))}]</span>`;
+  } catch (err) {
+    out.textContent = `Test failed: ${err.message}`;
+  }
+}
+
+async function applyAutomationPreset(presetName) {
+  try {
+    const res = await apiFetch("/api/settings/preset", {
+      method: "POST",
+      body: { preset: presetName },
+    });
+    if (state.settingsData) state.settingsData.config = res.config;
+    $("cfg-yaml-editor").value = JSON.stringify(res.config, null, 2);
+    renderEngineConfigForm(res.config);
+    toast(`Applied '${presetName.toUpperCase()}' automation preset and saved to Neon!`);
+  } catch (err) {
+    toast(`Preset apply failed: ${err.message}`, "error");
+  }
+}
+
 async function loadConfigVault() {
   try {
-    const data = await apiFetch("/api/settings");
+    const [data] = await Promise.all([apiFetch("/api/settings"), loadModelCatalog(false)]);
     state.settingsData = data;
 
     const prof = data.master_profile || {};
-    const cfg = data.config || {};
+    const cfg = data.effective_config || data.config || {};
 
     $("cfg-profile-editor").value = JSON.stringify(prof, null, 2);
     $("cfg-yaml-editor").value = JSON.stringify(cfg, null, 2);
@@ -2845,14 +3182,43 @@ function appendWorkdayRow(wd = {}) {
 }
 
 function renderEngineConfigForm(cfg) {
+  // 0. Models Picker
+  const models = cfg.models || {};
+  const mTailor = models.tailor || { provider: "openai", model: "gpt-4o" };
+  const mBrowser = models.browser_agent || { provider: "openai", model: "gpt-4o" };
+  const mEmbed = models.embeddings || { provider: "openai", model: "text-embedding-3-small" };
+  const mTriage = models.triage || { provider: "openrouter", model: "typesafe/jev-1.14" };
+
+  if ($("ec-mod-tailor-provider")) {
+    $("ec-mod-tailor-provider").value = mTailor.provider || "openai";
+    populateModelSelect("ec-mod-tailor-select", "chat_models", $("ec-mod-tailor-provider").value, mTailor.model, "ec-mod-tailor-custom");
+  }
+  if ($("ec-mod-browser-provider")) {
+    $("ec-mod-browser-provider").value = mBrowser.provider || "openai";
+    populateModelSelect("ec-mod-browser-select", "chat_models", $("ec-mod-browser-provider").value, mBrowser.model, "ec-mod-browser-custom");
+  }
+  if ($("ec-mod-embed-provider")) {
+    $("ec-mod-embed-provider").value = mEmbed.provider || "openai";
+    populateModelSelect("ec-mod-embed-select", "embedding_models", $("ec-mod-embed-provider").value, mEmbed.model, "ec-mod-embed-custom");
+  }
+  if ($("ec-mod-triage-provider")) {
+    $("ec-mod-triage-provider").value = mTriage.provider || "openrouter";
+    populateModelSelect("ec-mod-triage-select", "triage_models", $("ec-mod-triage-provider").value, mTriage.model, "ec-mod-triage-custom");
+  }
+
+  // 1. Automation Guardrails
   const auto = cfg.automation || {};
-  $("ec-auto-apply-mode").value = auto.apply_mode || "DRY_RUN";
+  const modeAlias = { DRY_RUN: "PREPARE_ONLY", AUTO_CONFIRM: "CONFIRM_SUBMIT", MANUAL: "MANUAL_ONLY" };
+  const normMode = modeAlias[String(auto.apply_mode || "PREPARE_ONLY").toUpperCase()] || auto.apply_mode || "PREPARE_ONLY";
+  $("ec-auto-apply-mode").value = normMode;
   $("ec-auto-daily-cap").value = auto.daily_cap ?? 5;
   $("ec-auto-cooldown").value = auto.per_company_cooldown_hours ?? 72;
-  $("ec-auto-min-fit").value = auto.min_fit_prob ?? 0.7;
-  $("ec-auto-max-free").value = auto.max_free_text_questions ?? 0;
+  $("ec-auto-min-fit").value = auto.min_fit_prob ?? 0.65;
+  if ($("ec-auto-max-scam")) $("ec-auto-max-scam").value = auto.max_scam_prob ?? 0.30;
+  $("ec-auto-max-free").value = auto.max_free_text_questions ?? 2;
   setTagBox("ec-auto-allowed-domains-box", auto.allowed_apply_domains || []);
   $("ec-auto-first-confirm").checked = auto.first_company_confirm !== false;
+  if ($("ec-auto-headful")) $("ec-auto-headful").checked = Boolean(auto.allow_headful_handoff);
 
   const tiers = new Set(auto.allowed_tiers || ["strong_fit", "dream_role"]);
   $("ec-tier-dream").checked = tiers.has("dream_role");
@@ -2860,19 +3226,44 @@ function renderEngineConfigForm(cfg) {
   $("ec-tier-moderate").checked = tiers.has("moderate_fit");
   $("ec-tier-weak").checked = tiers.has("weak_fit");
 
+  // 2. Composable Location Policy
+  const lp = cfg.location_policy || {
+    operator: "OR",
+    candidate_country: "india",
+    check_jd_geo_blockers: true,
+    reject_countries: ["us", "canada", "uk", "eu", "emea", "europe", "australia", "latam"],
+    rules: [{ name: "remote_anywhere", work_modes: ["remote"], allowed_regions: ["anywhere", "worldwide", "global", "india", "apac"], allow_unspecified_remote: true }],
+  };
+  if ($("ec-lp-operator")) $("ec-lp-operator").value = (lp.operator || "OR").toUpperCase();
+  if ($("ec-lp-country")) $("ec-lp-country").value = lp.candidate_country || "india";
+  if ($("ec-lp-check-jd")) $("ec-lp-check-jd").checked = lp.check_jd_geo_blockers !== false;
+  setTagBox("ec-lp-reject-box", lp.reject_countries || []);
+  if ($("ec-lp-rules-list")) {
+    $("ec-lp-rules-list").innerHTML = "";
+    (lp.rules || []).forEach((r) => appendLocationRuleRow(r));
+  }
+
+  // 3. Candidate Preferences
   const prefs = cfg.candidate_preferences || {};
   setTagBox("ec-pref-roles-box", prefs.target_role_keywords || []);
   setTagBox("ec-pref-excludes-box", prefs.exclude_title_keywords || []);
   setTagBox("ec-pref-locations-box", prefs.allowed_locations || []);
+  if ($("ec-pref-max-exp")) $("ec-pref-max-exp").value = prefs.max_experience_years ?? "";
 
+  // 4. Ingestion & Triage Pipeline
   const ing = cfg.ingestion || {};
   $("ec-ing-concurrency").value = ing.triage_concurrency ?? 3;
   $("ec-ing-max-age").value = ing.max_job_age_days ?? 7;
+  if ($("ec-ing-jb-interval")) $("ec-ing-jb-interval").value = ing.jobboards_interval_minutes ?? 60;
+  if ($("ec-ing-ats-interval")) $("ec-ing-ats-interval").value = ing.ats_interval_minutes ?? 240;
+  if ($("ec-ing-wd-interval")) $("ec-ing-wd-interval").value = ing.workday_interval_minutes ?? 720;
   $("ec-ing-prioritize").checked = ing.prioritize_scraping !== false;
   $("ec-ing-scrape-only").checked = Boolean(ing.scrape_only);
   $("ec-ing-enable-ats").checked = ing.enable_ats !== false;
   $("ec-ing-enable-jobboards").checked = ing.enable_jobboards !== false;
   $("ec-ing-enable-gmail").checked = ing.enable_gmail !== false;
+  if ($("ec-ing-enable-workday")) $("ec-ing-enable-workday").checked = Boolean(ing.enable_workday);
+  if ($("ec-ing-enable-remote-feeds")) $("ec-ing-enable-remote-feeds").checked = ing.enable_remote_feeds !== false;
 
   const jb = cfg.jobboards || {};
   setTagBox("ec-jb-sites-box", jb.sites || ["naukri", "linkedin", "indeed"]);
@@ -2905,6 +3296,20 @@ function renderEngineConfigForm(cfg) {
 function collectEngineConfigForm() {
   const base = JSON.parse(JSON.stringify((state.settingsData && state.settingsData.config) || {}));
 
+  const readModelChoice = (provId, selId, customId, fallbackProv, fallbackMod) => {
+    const prov = ($(provId) && $(provId).value) || fallbackProv;
+    const custom = ($(customId) && $(customId).value.trim()) || "";
+    const selected = ($(selId) && $(selId).value) || fallbackMod;
+    return { provider: prov, model: custom || selected || fallbackMod };
+  };
+
+  base.models = {
+    tailor: readModelChoice("ec-mod-tailor-provider", "ec-mod-tailor-select", "ec-mod-tailor-custom", "openai", "gpt-4o"),
+    browser_agent: readModelChoice("ec-mod-browser-provider", "ec-mod-browser-select", "ec-mod-browser-custom", "openai", "gpt-4o"),
+    embeddings: readModelChoice("ec-mod-embed-provider", "ec-mod-embed-select", "ec-mod-embed-custom", "openai", "text-embedding-3-small"),
+    triage: readModelChoice("ec-mod-triage-provider", "ec-mod-triage-select", "ec-mod-triage-custom", "openrouter", "typesafe/jev-1.14"),
+  };
+
   const tiers = [];
   if ($("ec-tier-dream").checked) tiers.push("dream_role");
   if ($("ec-tier-strong").checked) tiers.push("strong_fit");
@@ -2916,29 +3321,40 @@ function collectEngineConfigForm() {
     apply_mode: $("ec-auto-apply-mode").value,
     daily_cap: Number($("ec-auto-daily-cap").value || 0),
     per_company_cooldown_hours: Number($("ec-auto-cooldown").value || 0),
-    min_fit_prob: Number($("ec-auto-min-fit").value || 0.7),
+    min_fit_prob: Number($("ec-auto-min-fit").value || 0.65),
+    max_scam_prob: Number(($("ec-auto-max-scam") && $("ec-auto-max-scam").value) || 0.30),
     max_free_text_questions: Number($("ec-auto-max-free").value || 0),
     first_company_confirm: $("ec-auto-first-confirm").checked,
+    allow_headful_handoff: $("ec-auto-headful") ? $("ec-auto-headful").checked : false,
     allowed_tiers: tiers,
     allowed_apply_domains: getTagBox("ec-auto-allowed-domains-box"),
   };
 
+  base.location_policy = collectLocationPolicyFromForm();
+
+  const maxExpRaw = $("ec-pref-max-exp") ? $("ec-pref-max-exp").value.trim() : "";
   base.candidate_preferences = {
     ...(base.candidate_preferences || {}),
     target_role_keywords: getTagBox("ec-pref-roles-box"),
     exclude_title_keywords: getTagBox("ec-pref-excludes-box"),
     allowed_locations: getTagBox("ec-pref-locations-box"),
+    max_experience_years: maxExpRaw ? Number(maxExpRaw) : null,
   };
 
   base.ingestion = {
     ...(base.ingestion || {}),
     triage_concurrency: Number($("ec-ing-concurrency").value || 3),
     max_job_age_days: Number($("ec-ing-max-age").value || 7),
+    jobboards_interval_minutes: Number(($("ec-ing-jb-interval") && $("ec-ing-jb-interval").value) || 60),
+    ats_interval_minutes: Number(($("ec-ing-ats-interval") && $("ec-ing-ats-interval").value) || 240),
+    workday_interval_minutes: Number(($("ec-ing-wd-interval") && $("ec-ing-wd-interval").value) || 720),
     prioritize_scraping: $("ec-ing-prioritize").checked,
     scrape_only: $("ec-ing-scrape-only").checked,
     enable_ats: $("ec-ing-enable-ats").checked,
     enable_jobboards: $("ec-ing-enable-jobboards").checked,
     enable_gmail: $("ec-ing-enable-gmail").checked,
+    enable_workday: $("ec-ing-enable-workday") ? $("ec-ing-enable-workday").checked : false,
+    enable_remote_feeds: $("ec-ing-enable-remote-feeds") ? $("ec-ing-enable-remote-feeds").checked : true,
   };
 
   base.jobboards = {
@@ -3221,7 +3637,24 @@ function bindEvents() {
 
     const actBtn = ev.target.closest("[data-job-action]");
     if (actBtn) {
-      triggerJobAction(actBtn.dataset.jobId, actBtn.dataset.jobAction);
+      const act = actBtn.dataset.jobAction;
+      if (act === "SKIP_BAD_FIT" || act === "SKIP_SCAM") {
+        openSkipModal(actBtn.dataset.jobId, act);
+      } else {
+        triggerJobAction(actBtn.dataset.jobId, act);
+      }
+      return;
+    }
+
+    const presetBtn = ev.target.closest("[data-apply-preset]");
+    if (presetBtn) {
+      applyAutomationPreset(presetBtn.dataset.applyPreset);
+      return;
+    }
+
+    const completeExpBtn = ev.target.closest("[data-complete-exp]");
+    if (completeExpBtn) {
+      completeExperimentById(Number(completeExpBtn.dataset.completeExp));
       return;
     }
 
@@ -3494,6 +3927,38 @@ function bindEvents() {
 
   // Eval events
   $("btn-eval-refresh").addEventListener("click", loadEvalData);
+  if ($("btn-eval-start-exp")) $("btn-eval-start-exp").addEventListener("click", startNewExperiment);
+  if ($("btn-eval-calibrate")) $("btn-eval-calibrate").addEventListener("click", triggerFitCalibration);
+
+  // Skip Reason Modal events
+  if ($("skip-modal-form")) $("skip-modal-form").addEventListener("submit", confirmSkipModal);
+  if ($("skip-reason-select")) $("skip-reason-select").addEventListener("change", updateSkipLearningHint);
+  if ($("skip-reason-note")) $("skip-reason-note").addEventListener("input", updateSkipLearningHint);
+  if ($("btn-close-skip")) $("btn-close-skip").addEventListener("click", closeSkipModal);
+  if ($("btn-cancel-skip")) $("btn-cancel-skip").addEventListener("click", closeSkipModal);
+
+  // Model Picker & Location Policy events
+  if ($("btn-ec-refresh-models")) {
+    $("btn-ec-refresh-models").addEventListener("click", async () => {
+      await loadModelCatalog(true);
+      if (state.settingsData) renderEngineConfigForm(state.settingsData.config || {});
+      toast("Refreshed live models from configured API providers!");
+    });
+  }
+  const bindProvChange = (provId, selId, bucket, customId) => {
+    if ($(provId)) {
+      $(provId).addEventListener("change", () => {
+        populateModelSelect(selId, bucket, $(provId).value, "", customId);
+      });
+    }
+  };
+  bindProvChange("ec-mod-tailor-provider", "ec-mod-tailor-select", "chat_models", "ec-mod-tailor-custom");
+  bindProvChange("ec-mod-browser-provider", "ec-mod-browser-select", "chat_models", "ec-mod-browser-custom");
+  bindProvChange("ec-mod-embed-provider", "ec-mod-embed-select", "embedding_models", "ec-mod-embed-custom");
+  bindProvChange("ec-mod-triage-provider", "ec-mod-triage-select", "triage_models", "ec-mod-triage-custom");
+
+  if ($("btn-ec-add-loc-rule")) $("btn-ec-add-loc-rule").addEventListener("click", () => appendLocationRuleRow({ work_modes: ["remote"], allowed_regions: ["anywhere", "worldwide", "global"] }));
+  if ($("btn-ec-test-loc")) $("btn-ec-test-loc").addEventListener("click", runLocationPolicyTest);
 
   // Config & Vault events (Forms + Raw JSON)
   initAllTagBoxes();

@@ -7,9 +7,15 @@ import sys
 import time
 
 from dotenv import load_dotenv, set_key
-from evals.evaluate_triage import run_evaluation
+from evals.evaluate_triage import (
+    complete_experiment,
+    list_experiments,
+    run_evaluation,
+    start_experiment,
+)
 import httpx
 
+from src.calibrate import fit_and_persist_calibration_model
 from src.db import close_pool, get_connection, get_pool, init_db, reset_database
 from src.db_migrate import pending_migrations
 from src.hitl.telegram_bot import listen_for_button_clicks
@@ -23,6 +29,8 @@ from src.readiness import collect_readiness
 from src.settings_store import (
     EXAMPLE_PROFILE_PATH,
     LOCAL_PROFILE_PATH,
+    get_sync_status,
+    pull_db_to_local,
     sync_local_to_db,
 )
 
@@ -172,22 +180,27 @@ def run_doctor():
 def print_help():
     print(
         """
-🛠️  Relentless — One-Stop Control Center (manage.py)
+🛠️  Relentless v4 — One-Stop Control Center (manage.py)
 
 Usage:
-  python manage.py setup          # Interactive onboarding wizard (auto-detects Telegram Chat ID!)
-  python manage.py sync           # Push local gitignored master_profile.json & config.yaml to Neon DB
-  python manage.py doctor         # Verify DB, API keys, and cloud profile privacy status
-  python manage.py reset labels   # Soft Reset: clear only button clicks (Eval n=0, keeps Jev scores)
-  python manage.py reset triage   # Medium Reset: clear Jev scores + clicks to re-score scraped jobs
-  python manage.py reset all      # Factory Reset: wipe all scraped jobs and restart IDs at #1
-  python manage.py eval           # Print live Precision@K, Wilson 95% CIs, and Brier calibration table
-  python manage.py run            # Unified Command: Starts Telegram bot + Web API + streaming producers concurrently
-  python manage.py web            # Start standalone Web Command Center API & UI server
-  python manage.py run --scrape-only # Fast Mode: Scrapes Job boards & Gmail only (skips slow ATS)
-  python manage.py run --ats-only    # ATS Only: Scans only company ATS endpoints
-  python manage.py run --once        # Run single pipeline iteration and exit
-  python manage.py ingest         # Direct one-off ingestion run with same flags
+  python manage.py setup                    # Interactive onboarding wizard (auto-detects Telegram Chat ID!)
+  python manage.py pull                     # Git-like pull: download latest Web UI/Cloud config & profile from Neon DB
+  python manage.py sync [--force]           # Safe push: push local config/profile to Neon DB (blocks if DB is newer!)
+  python manage.py doctor                   # Verify DB, API keys, models, sync status & location policy readiness
+  python manage.py reset labels             # Soft Reset: clear only button clicks (Eval n=0, keeps Jev scores)
+  python manage.py reset triage             # Medium Reset: clear Jev scores + clicks to re-score scraped jobs
+  python manage.py reset all                # Factory Reset: wipe all scraped jobs and restart IDs at #1
+  python manage.py eval                     # Print live Precision@K, Wilson 95% CIs, and Brier calibration table
+  python manage.py calibrate                # Fit & persist LOOCV-validated PAVA calibration model (n>=30 balanced)
+  python manage.py experiment start [note]  # Snapshot baseline eval metrics and start a tracked A/B experiment
+  python manage.py experiment complete <id> # Snapshot post-change metrics and auto-accept/reject experiment
+  python manage.py experiment list          # List tracked experiments with before/after Precision@K & Brier
+  python manage.py run                      # Unified Command: Starts Telegram bot + Web API + streaming producers
+  python manage.py web                      # Start standalone Web Command Center API & UI server
+  python manage.py run --scrape-only        # Fast Mode: Scrapes Job boards & Gmail only (skips ATS)
+  python manage.py run --ats-only           # ATS Only: Scans only company ATS endpoints
+  python manage.py run --once               # Run single pipeline iteration and exit
+  python manage.py ingest                   # Direct one-off ingestion run with same flags
 """
     )
 
@@ -234,16 +247,64 @@ if __name__ == "__main__":
     cmd = sys.argv[1].lower() if len(sys.argv) > 1 else "help"
     if cmd == "setup":
         interactive_setup()
+    elif cmd == "pull":
+        init_db()
+        pull_db_to_local()
     elif cmd == "sync":
         init_db()
-        sync_local_to_db()
+        sync_local_to_db(force="--force" in sys.argv)
     elif cmd == "doctor":
         run_doctor()
+        try:
+            st = get_sync_status()
+            print("  🔄 Config Sync Status (Local vs Neon DB):")
+            for k, info in st.items():
+                print(f"     • {k}: {info['state']} ({info['path']})")
+        except Exception:
+            pass
     elif cmd == "reset":
         mode = sys.argv[2].lower() if len(sys.argv) > 2 else "labels"
         reset_database(mode)
     elif cmd == "eval":
         run_evaluation()
+    elif cmd == "calibrate":
+        init_db()
+        min_n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 30
+        min_per_class = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 10
+        model = fit_and_persist_calibration_model(
+            min_n=min_n, min_per_class=min_per_class, created_by="human:cli"
+        )
+        if model:
+            print(f"✅ Activated new PAVA calibration model (n={model.n}, metrics={model.metrics})")
+        else:
+            print(
+                f"ℹ️  Calibration not activated: need >= {min_n} balanced labels (>= {min_per_class} per class) "
+                "and strict LOOCV Brier improvement."
+            )
+    elif cmd == "experiment":
+        init_db()
+        sub = sys.argv[2].lower() if len(sys.argv) > 2 else "list"
+        if sub == "start":
+            note = " ".join(sys.argv[3:]).strip() or "manual experiment"
+            row = start_experiment({"note": note})
+            print(f"🧪 Started experiment #{row['id']} (eval_run_id_before={row['eval_run_id_before']}, note={note!r})")
+        elif sub == "complete":
+            if len(sys.argv) < 4 or not sys.argv[3].isdigit():
+                print("Usage: python manage.py experiment complete <experiment_id> [--accept|--reject]")
+                sys.exit(1)
+            exp_id = int(sys.argv[3])
+            accept = True if "--accept" in sys.argv else (False if "--reject" in sys.argv else None)
+            row = complete_experiment(exp_id, accept=accept)
+            print(f"🧪 Completed experiment #{row['id']} -> status={row['status']} (after_run={row['eval_run_id_after']})")
+        else:
+            exps = list_experiments(limit=20)
+            if not exps:
+                print("📭 No experiments recorded yet. Run 'python manage.py experiment start <note>'.")
+            for e in exps:
+                print(
+                    f"  • Exp #{e['id']} [{e['status']}] params={e.get('params')} "
+                    f"before={e.get('before_metrics')} after={e.get('after_metrics')}"
+                )
     elif cmd == "run":
         configure_logging(capture_stdio=True)
         run_args = _parse_run_flags(sys.argv[2:])

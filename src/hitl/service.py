@@ -21,15 +21,27 @@ import yaml
 
 from evals.evaluate_triage import (
     brier_score,
+    complete_experiment,
+    list_experiments,
     precision_at_k,
     run_evaluation,
+    start_experiment,
     wilson_95_ci,
 )
-from src.apply.runner import submit_application
-from src.config import AppConfig, invalidate_config, load_config
+from src.calibrate import fit_and_persist_calibration_model, load_active_calibration_model
+from src.config import (
+    AUTOMATION_PRESETS,
+    AppConfig,
+    LocationPolicy,
+    apply_automation_preset,
+    invalidate_config,
+    load_config,
+)
 from src.db import create_apply_confirmation, get_connection, reset_database
-from src.knowledge.distiller import run_distill
+from src.ingestors.location_policy import evaluate_job_location
+from src.knowledge.distiller import SKIP_REASON_CATEGORIES, run_distill, should_learn_from_skip
 from src.knowledge.store import Concept, get_store, is_stale, trust_tier
+from src.model_catalog import fetch_live_model_catalog
 from src.pipeline import TASK_REGISTRY
 from src.settings_store import (
     LOCAL_CONFIG_PATH,
@@ -462,27 +474,63 @@ async def record_job_action(
     actor_source: str = "web",
     chat_id: int | None = None,
     clicked_mid: int | None = None,
+    reason_category: str | None = None,
+    reason_note: str | None = None,
 ) -> dict[str, Any]:
-    """Records Skip / Manual Apply / Outcome updates and synchronizes Telegram card state."""
+    """Records Skip (with structured reason + intelligent learning gate) / Manual Apply / Outcome updates."""
     action_norm = (action or "").strip().upper()
     if action_norm not in SUPPORTED_ACTIONS:
         raise ValueError(f"Unsupported job action: {action}")
 
+    clean_reason_cat = (reason_category or "").strip().upper() or None
+    if clean_reason_cat and clean_reason_cat not in SKIP_REASON_CATEGORIES:
+        raise ValueError(
+            f"Unsupported skip reason category: {reason_category}. "
+            f"Valid: {', '.join(SKIP_REASON_CATEGORIES)}"
+        )
+    clean_reason_note = (reason_note or "").strip() or None
+
+    learn_flag = True
+    learn_reason = "Recorded feedback."
+    if action_norm in SUPPORTED_SKIP_ACTIONS:
+        learn_flag, learn_reason = should_learn_from_skip(
+            action_norm, clean_reason_cat, clean_reason_note
+        )
+
     def _persist_action():
         with get_connection() as conn, conn.cursor() as cur:
             if action_norm in SUPPORTED_SKIP_ACTIONS:
-                cur.execute(
-                    """
-                    UPDATE jobs
-                    SET human_action = %s,
-                        human_action_at = NOW(),
-                        workflow_stage = 'REVIEWED'
-                    WHERE id = %s
-                    RETURNING *;
-                    """,
-                    (action_norm, job_id),
-                )
-                row = cur.fetchone()
+                try:
+                    cur.execute(
+                        """
+                        UPDATE jobs
+                        SET human_action = %s,
+                            human_action_at = NOW(),
+                            workflow_stage = 'REVIEWED',
+                            skip_reason_category = %s,
+                            skip_reason_note = %s,
+                            learn_from_action = %s
+                        WHERE id = %s
+                        RETURNING *;
+                        """,
+                        (action_norm, clean_reason_cat, clean_reason_note, learn_flag, job_id),
+                    )
+                    row = cur.fetchone()
+                except Exception:
+                    if hasattr(conn, "rollback"):
+                        conn.rollback()
+                    cur.execute(
+                        """
+                        UPDATE jobs
+                        SET human_action = %s,
+                            human_action_at = NOW(),
+                            workflow_stage = 'REVIEWED'
+                        WHERE id = %s
+                        RETURNING *;
+                        """,
+                        (action_norm, job_id),
+                    )
+                    row = cur.fetchone()
             elif action_norm == "MANUALLY_APPLIED":
                 cur.execute(
                     """
@@ -524,7 +572,8 @@ async def record_job_action(
     if not updated_row:
         return {"ok": False, "error": "NOT_FOUND", "job_id": job_id}
 
-    _spawn_background_distill()
+    if learn_flag:
+        _spawn_background_distill()
 
     target_chat_id = _resolve_chat_id(
         chat_id=chat_id,
@@ -569,6 +618,10 @@ async def record_job_action(
         "ok": True,
         "job_id": job_id,
         "action": action_norm,
+        "reason_category": clean_reason_cat,
+        "reason_note": clean_reason_note,
+        "learned_from_action": learn_flag,
+        "learning_reason": learn_reason,
         "job": _serialize_row(updated_row),
     }
 
@@ -619,7 +672,9 @@ async def execute_job_submit(
 
     TASK_REGISTRY.set_job_stage(job_id, "Submitting application via browser")
     try:
-        res = await submit_application(job_row, token)
+        from src.orchestrator.graph import run_apply_agent_graph
+
+        res = await run_apply_agent_graph(job_row, action="SUBMIT", confirmation_token=token)
         status = res.get("status")
         is_success = status == "SUBMITTED"
         final_stage = "APPLIED" if is_success else "READY_FOR_REVIEW"
@@ -874,16 +929,32 @@ def get_evaluation_data() -> dict[str, Any]:
         cur.execute("SELECT COUNT(*) AS passed FROM jobs WHERE triage_passed = TRUE;")
         total_passed = int((cur.fetchone() or {}).get("passed", 0))
 
-        cur.execute(
-            """
-            SELECT id, company, title, source_ats, cosine_sim, jev_fit_prob, jev_fit_prob_cal,
-                   jev_scam_prob, jev_fit_tier, human_action, outcome_status
-            FROM jobs
-            WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM')
-            ORDER BY human_action_at DESC;
-            """
-        )
-        labeled_rows = [dict(r) for r in (cur.fetchall() or [])]
+        try:
+            cur.execute(
+                """
+                SELECT id, company, title, source_ats, cosine_sim, embedding_sim, jev_fit_prob, jev_fit_prob_cal,
+                       jev_scam_prob, jev_fit_tier, human_action, outcome_status
+                FROM jobs
+                WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM')
+                  AND COALESCE(learn_from_action, TRUE) = TRUE
+                  AND COALESCE(skip_reason_category, '') <> 'EXPIRED_OR_CLOSED'
+                ORDER BY human_action_at DESC;
+                """
+            )
+            labeled_rows = [dict(r) for r in (cur.fetchall() or [])]
+        except Exception:
+            if hasattr(conn, "rollback"):
+                conn.rollback()
+            cur.execute(
+                """
+                SELECT id, company, title, source_ats, cosine_sim, jev_fit_prob, jev_fit_prob_cal,
+                       jev_scam_prob, jev_fit_tier, human_action, outcome_status
+                FROM jobs
+                WHERE human_action IN ('APPLIED', 'SKIP_BAD_FIT', 'SKIP_SCAM')
+                ORDER BY human_action_at DESC;
+                """
+            )
+            labeled_rows = [dict(r) for r in (cur.fetchall() or [])]
 
         try:
             cur.execute(
@@ -893,6 +964,10 @@ def get_evaluation_data() -> dict[str, Any]:
             history = [_serialize_row(r) for r in (cur.fetchall() or []) if r is not None]
         except Exception:
             history = []
+
+    experiments = [_serialize_row(e) for e in list_experiments(limit=20) if e is not None]
+    active_cal = load_active_calibration_model()
+    active_cal_dict = active_cal.to_dict() if active_cal else None
 
     n = len(labeled_rows)
     if n == 0:
@@ -921,6 +996,8 @@ def get_evaluation_data() -> dict[str, Any]:
             "brier_skill_score": None,
             "source_breakdown": {},
             "history": history,
+            "experiments": experiments,
+            "active_calibration": active_cal_dict,
             "report_markdown": report_md,
         }
 
@@ -995,6 +1072,8 @@ def get_evaluation_data() -> dict[str, Any]:
         "brier_skill_score": bss,
         "source_breakdown": source_breakdown,
         "history": history,
+        "experiments": experiments,
+        "active_calibration": active_cal_dict,
         "report_markdown": report_md,
     }
 
@@ -1054,6 +1133,8 @@ def get_user_settings() -> dict[str, Any]:
         "profile_error": profile_error or readiness.get("profile_error"),
         "config": raw_config or effective_cfg,
         "effective_config": effective_cfg,
+        "presets": AUTOMATION_PRESETS,
+        "skip_reasons": SKIP_REASON_CATEGORIES,
         "is_paused": is_paused,
         "paused_until": paused_until,
         "readiness": readiness,
@@ -1157,3 +1238,99 @@ def reset_database_action(mode: str) -> dict[str, Any]:
 
 async def async_reset_database_action(mode: str) -> dict[str, Any]:
     return await asyncio.to_thread(reset_database_action, mode)
+
+
+# ==============================================================================
+# 7. Relentless v4: Model Catalog, Location Policy Tester, Presets & Experiments
+# ==============================================================================
+async def async_get_models_catalog(force: bool = False) -> dict[str, Any]:
+    """Returns curated + live-discovered chat, embedding, and triage models across OpenAI/OpenRouter."""
+    return await fetch_live_model_catalog(force=force)
+
+
+def test_location_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    """Dry-tests a sample job (title, location, jd_text, is_remote) against a LocationPolicy."""
+    policy_raw = payload.get("location_policy")
+    if isinstance(policy_raw, dict):
+        policy = LocationPolicy(**policy_raw)
+    else:
+        policy = load_config().effective_location_policy()
+
+    title = str(payload.get("title") or "")
+    location = str(payload.get("location") or "")
+    jd_text = str(payload.get("jd_text") or "")
+    is_remote_hint = payload.get("is_remote")
+    if is_remote_hint is not None:
+        is_remote_hint = bool(is_remote_hint)
+
+    accepted, reason, facts = evaluate_job_location(
+        title=title,
+        location=location,
+        jd_text=jd_text,
+        is_remote_hint=is_remote_hint,
+        policy=policy,
+    )
+    return {
+        "ok": True,
+        "accepted": accepted,
+        "reason": reason,
+        "facts": {
+            "raw_location": facts.raw_location,
+            "work_mode": facts.work_mode,
+            "countries": sorted(facts.countries),
+            "cities": sorted(facts.cities),
+            "remote_regions": sorted(facts.remote_regions),
+            "has_foreign_auth_blocker": facts.has_foreign_auth_blocker,
+            "blocker_reason": facts.blocker_reason,
+        },
+        "policy": policy.model_dump(),
+    }
+
+
+async def async_test_location_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    return await asyncio.to_thread(test_location_policy, payload)
+
+
+def apply_preset_and_save(preset_name: str) -> dict[str, Any]:
+    """Applies a named automation preset ('safe' | 'balanced' | 'fast') and persists config."""
+    current = load_config(force=True).model_dump()
+    updated = apply_automation_preset(current, preset_name)
+    saved = save_config_yaml(updated)
+    return {"ok": True, "preset": preset_name.strip().lower(), "config": saved["config"]}
+
+
+async def async_apply_preset_and_save(preset_name: str) -> dict[str, Any]:
+    return await asyncio.to_thread(apply_preset_and_save, preset_name)
+
+
+async def async_list_experiments(limit: int = 20) -> list[dict[str, Any]]:
+    rows = await asyncio.to_thread(list_experiments, limit)
+    return [_serialize_row(r) for r in rows if r is not None]
+
+
+async def async_start_experiment(params: dict[str, Any]) -> dict[str, Any]:
+    row = await asyncio.to_thread(start_experiment, params)
+    return _serialize_row(row) or {}
+
+
+async def async_complete_experiment(
+    experiment_id: int, accept: bool | None = None
+) -> dict[str, Any]:
+    row = await asyncio.to_thread(complete_experiment, experiment_id, accept)
+    return _serialize_row(row) or {}
+
+
+async def async_trigger_calibration(min_n: int = 30, min_per_class: int = 10) -> dict[str, Any]:
+    model = await asyncio.to_thread(
+        fit_and_persist_calibration_model,
+        min_n=min_n,
+        min_per_class=min_per_class,
+        created_by="human:web",
+    )
+    if model is None:
+        return {
+            "ok": False,
+            "activated": False,
+            "message": f"Not enough balanced ground-truth labels (need >= {min_n} total, >= {min_per_class} per class) or LOOCV Brier did not improve.",
+        }
+    return {"ok": True, "activated": True, "model": model.to_dict()}

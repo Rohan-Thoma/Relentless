@@ -12,7 +12,6 @@ import httpx
 from psycopg.types.json import Jsonb
 
 from evals.evaluate_triage import run_evaluation
-from src.apply.runner import prepare_application, submit_application
 from src.db import (
     consume_pending_action,
     create_apply_confirmation,
@@ -23,7 +22,8 @@ from src.db import (
     try_acquire_advisory_lock,
 )
 from src.hitl.auth import is_authorized, update_chat_id
-from src.knowledge.distiller import run_distill
+from src.hitl.service import record_job_action
+from src.knowledge.distiller import SKIP_REASON_CATEGORIES, run_distill
 from src.knowledge.store import get_store
 from src.logging_config import format_logs_text, get_recent_logs
 from src.notify import alert
@@ -39,8 +39,9 @@ TG_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logger = logging.getLogger(__name__)
 
-# In-memory map of active edit job per chat
+# In-memory map of active edit job or custom skip-reason session per chat
 _ACTIVE_EDIT_JOB: dict[int, int] = {}
+_ACTIVE_SKIP_NOTE_JOB: dict[int, int] = {}
 
 # In-memory deduplication of update IDs
 _PROCESSED_UPDATE_IDS = collections.deque(maxlen=1000)
@@ -90,15 +91,37 @@ class InlineKeyboardList(list):
 
 
 def build_inline_keyboard(job_id: int) -> list[list[dict]]:
-    """Builds discovery buttons for new job cards."""
+    """Builds discovery buttons for new job cards (with structured skip-reason menu)."""
     return InlineKeyboardList([
         [
             {"text": "🎯 Interested (Tailor & Check Site)", "callback_data": f"interest:{job_id}"},
             {"text": "👎 Skip: Bad Fit", "callback_data": f"act:SKIP_BAD_FIT:{job_id}"},
         ],
         [
-            {"text": "🚫 Skip: Ghost/Scam", "callback_data": f"act:SKIP_SCAM:{job_id}"},
-            {"text": "⭐ Got Callback!", "callback_data": f"out:CALLBACK:{job_id}"},
+            {"text": "📝 Skip w/ Reason", "callback_data": f"skip_menu:{job_id}"},
+            {"text": "🚫 Skip: Scam", "callback_data": f"act:SKIP_SCAM:{job_id}"},
+            {"text": "⭐ Callback!", "callback_data": f"out:CALLBACK:{job_id}"},
+        ],
+    ])
+
+
+def build_skip_reason_keyboard(job_id: int) -> list[list[dict]]:
+    """Structured skip-reason keyboard so expired/busy skips never pollute OKF Brain."""
+    return InlineKeyboardList([
+        [
+            {"text": "📉 Exp / Seniority", "callback_data": f"skipr:BAD_MATCH_EXPERIENCE:{job_id}"},
+            {"text": "🛠️ Wrong Stack", "callback_data": f"skipr:BAD_MATCH_SKILLS:{job_id}"},
+        ],
+        [
+            {"text": "📍 Wrong Location", "callback_data": f"skipr:BAD_MATCH_LOCATION:{job_id}"},
+            {"text": "⏰ Expired / Closed", "callback_data": f"skipr:EXPIRED_OR_CLOSED:{job_id}"},
+        ],
+        [
+            {"text": "🚫 Scam / Avoid Co", "callback_data": f"skipr:SCAM_OR_BAD_COMPANY:{job_id}"},
+            {"text": "✍️ Custom Reason", "callback_data": f"skip_note:{job_id}"},
+        ],
+        [
+            {"text": "⬅️ Back", "callback_data": f"skip_cancel:{job_id}"},
         ],
     ])
 
@@ -465,62 +488,99 @@ async def _process_job_interest(
     custom_note: str = "",
     is_edit: bool = False,
     clicked_mid: int | None = None,
+    skip_tailor: bool = False,
 ):
     """
-    Executes ATS Resume Tailoring + Form Inspection under Playwright semaphore,
-    delivering strictly ONE single Telegram Rich Message (photo + PDF + buttons).
+    Executes ATS Resume Tailoring (unless skip_tailor=True and an existing tailored PDF/JSON exists)
+    + Form Inspection via ApplyAgentGraph, delivering strictly ONE single Telegram Rich Message.
     """
     job_id = job_row["id"]
     company = job_row["company"]
     title = job_row["title"]
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        # Step 1: Progress state
-        progress_text_1 = (
-            f"⏳ *Job #{job_id} ({company} — {title}) — Under Process*\n\n"
-            f"*(Step 1/2: Tailoring ATS PDF with zero hallucination...)*"
-        )
-        await upsert_job_rich_card(
-            client=client,
-            chat_id=chat_id,
-            job_id=job_id,
-            markdown_body=progress_text_1,
-            try_edit_text_only=True,
-            clicked_mid=clicked_mid,
+        can_reuse_existing = (
+            skip_tailor
+            and not is_edit
+            and not custom_note
+            and bool(job_row.get("tailored_resume_json") or job_row.get("tailored_pdf_path"))
         )
 
-        TASK_REGISTRY.set_job_stage(job_id, "Tailoring ATS PDF")
         try:
-            tailor_res = await tailor_resume_for_job(job_row, custom_instruction=custom_note)
-            pdf_path = tailor_res["pdf_path"]
-            pdf_sha = tailor_res["pdf_sha256"]
-            diff_summary = tailor_res["diff_summary"]
+            if can_reuse_existing:
+                TASK_REGISTRY.set_job_stage(job_id, "Inspecting application website")
+                pdf_path = await ensure_tailored_pdf(job_row)
+                pdf_sha = job_row.get("tailored_pdf_sha256")
+                diff_summary = job_row.get("tailored_diff") or ""
+                if pdf_path:
+                    job_row["tailored_pdf_path"] = pdf_path
+                    if not pdf_sha and Path(pdf_path).exists():
+                        from src.tailor.resume_tailor import compute_pdf_sha256
 
-            job_row["tailored_pdf_path"] = pdf_path
-            job_row["tailored_pdf_sha256"] = pdf_sha
+                        pdf_sha = await asyncio.to_thread(compute_pdf_sha256, pdf_path)
+                        job_row["tailored_pdf_sha256"] = pdf_sha
 
-            # Step 2: Progress state
-            progress_text_2 = (
-                f"⏳ *Job #{job_id} ({company} — {title}) — Under Process*\n\n"
-                f"*(Step 2/2: Inspecting & pre-filling application website...)*"
-            )
-            await upsert_job_rich_card(
-                client=client,
-                chat_id=chat_id,
-                job_id=job_id,
-                markdown_body=progress_text_2,
-                try_edit_text_only=True,
-                clicked_mid=clicked_mid,
-            )
+                progress_text_2 = (
+                    f"⏳ *Job #{job_id} ({company} — {title}) — Under Process*\n\n"
+                    f"*(Re-checking & pre-filling application website — keeping your existing tailored resume PDF...)*"
+                )
+                await upsert_job_rich_card(
+                    client=client,
+                    chat_id=chat_id,
+                    job_id=job_id,
+                    markdown_body=progress_text_2,
+                    try_edit_text_only=True,
+                    clicked_mid=clicked_mid,
+                )
+            else:
+                # Step 1: Progress state
+                progress_text_1 = (
+                    f"⏳ *Job #{job_id} ({company} — {title}) — Under Process*\n\n"
+                    f"*(Step 1/2: Tailoring ATS PDF with full JD & preservation verifier...)*"
+                )
+                await upsert_job_rich_card(
+                    client=client,
+                    chat_id=chat_id,
+                    job_id=job_id,
+                    markdown_body=progress_text_1,
+                    try_edit_text_only=True,
+                    clicked_mid=clicked_mid,
+                )
 
-            TASK_REGISTRY.set_job_stage(job_id, "Inspecting application website")
+                TASK_REGISTRY.set_job_stage(job_id, "Tailoring ATS PDF")
+                tailor_res = await tailor_resume_for_job(job_row, custom_instruction=custom_note)
+                pdf_path = tailor_res["pdf_path"]
+                pdf_sha = tailor_res["pdf_sha256"]
+                diff_summary = tailor_res["diff_summary"]
+
+                job_row["tailored_pdf_path"] = pdf_path
+                job_row["tailored_pdf_sha256"] = pdf_sha
+
+                # Step 2: Progress state
+                progress_text_2 = (
+                    f"⏳ *Job #{job_id} ({company} — {title}) — Under Process*\n\n"
+                    f"*(Step 2/2: Inspecting & pre-filling application website...)*"
+                )
+                await upsert_job_rich_card(
+                    client=client,
+                    chat_id=chat_id,
+                    job_id=job_id,
+                    markdown_body=progress_text_2,
+                    try_edit_text_only=True,
+                    clicked_mid=clicked_mid,
+                )
+
+                TASK_REGISTRY.set_job_stage(job_id, "Inspecting application website")
             try:
-                site_res = await prepare_application(job_row)
+                from src.orchestrator.graph import run_apply_agent_graph
+
+                site_res = await run_apply_agent_graph(job_row, action="PREPARE")
             except Exception as e:
                 logger.error("Site preparation error: %s", e)
                 site_res = {"status": "FAILED", "error": str(e), "feasible": False, "screenshots": []}
 
             feasible = bool(site_res.get("feasible", False))
+            human_gate = bool(site_res.get("human_gate", False))
             blocker = site_res.get("error") or ("Direct form ready" if feasible else "Blocked")
             screenshots = site_res.get("screenshots") or []
 
@@ -528,11 +588,27 @@ async def _process_job_interest(
             evidence_img = evidence_shots[-1] if evidence_shots else None
 
             # Build unified Rich Review Card
-            site_status_line = (
-                "🟢 *Website Check:* Direct application form detected & pre-filled! Ready for 1-tap auto-submit."
-                if feasible
-                else f"🟡 *Website Check:* Auto-submit blocked ({blocker}). Use the direct link below to submit your tailored PDF manually!"
-            )
+            from src.config import load_config
+
+            active_apply_mode = load_config().automation.normalized_apply_mode()
+            if feasible and active_apply_mode == "CONFIRM_SUBMIT":
+                site_status_line = (
+                    "🟢 *Website Check:* Direct application form detected & pre-filled! Ready for 1-tap auto-submit."
+                )
+            elif feasible:
+                site_status_line = (
+                    f"🟢 *Website Check:* Direct application form detected & pre-filled! "
+                    f"*(Auto-submit is currently in `{active_apply_mode}` safety mode — switch to `CONFIRM_SUBMIT` in Web UI `06 // CONFIG & VAULT` to enable 1-tap submit, or use the direct link below.)*"
+                )
+            elif human_gate:
+                site_status_line = (
+                    f"🤝 *Human Handoff Gate:* {blocker}\n"
+                    f"Open the direct employer link below to complete CAPTCHA/login and upload your tailored PDF!"
+                )
+            else:
+                site_status_line = (
+                    f"🟡 *Website Check:* Auto-submit blocked ({blocker}). Use the direct link below to submit your tailored PDF manually!"
+                )
 
             edit_header = (
                 f"👋 *Hey! For Job #{job_id} ({company} — {title}), here is your updated PDF:*\n"
@@ -558,7 +634,7 @@ async def _process_job_interest(
             )
 
             buttons = []
-            if feasible:
+            if feasible and active_apply_mode == "CONFIRM_SUBMIT":
                 def _create_token():
                     return create_apply_confirmation(
                         job_id,
@@ -577,7 +653,7 @@ async def _process_job_interest(
             ])
             buttons.append([
                 {"text": "🔄 Re-check Website", "callback_data": f"prepare:{job_id}"},
-                {"text": "❌ Drop Job", "callback_data": f"act:SKIP_BAD_FIT:{job_id}"},
+                {"text": "📝 Skip w/ Reason", "callback_data": f"skip_menu:{job_id}"},
             ])
 
             await upsert_job_rich_card(
@@ -909,6 +985,35 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
                 await handle_slash_command(client, text_in, chat_id=chat_id)
                 return
 
+            # Custom Skip Reason text capture (mirrors edit_prompt UX!)
+            if chat_id in _ACTIVE_SKIP_NOTE_JOB:
+                skip_jid = _ACTIVE_SKIP_NOTE_JOB.pop(chat_id)
+                note_clean = text_in.strip()
+                try:
+                    res = await record_job_action(
+                        skip_jid,
+                        "SKIP_BAD_FIT",
+                        actor_source="telegram",
+                        chat_id=chat_id,
+                        reason_category="BUSY_OR_OTHER",
+                        reason_note=note_clean,
+                    )
+                    learn_badge = (
+                        "🧠 OKF Brain learned from this reason."
+                        if res.get("learned_from_action")
+                        else "🧹 Transient skip — excluded from OKF Brain & calibration."
+                    )
+                    await client.post(
+                        f"{TG_BASE}/sendMessage",
+                        json={
+                            "chat_id": chat_id,
+                            "text": f"🗑️ Skipped Job #{skip_jid} (\"{note_clean}\").\n{learn_badge}",
+                        },
+                    )
+                except Exception as e:
+                    logger.error("Failed recording custom skip note for job #%s: %s", skip_jid, e)
+                return
+
             resolved_jid = None
             edit_instruction = ""
 
@@ -1128,7 +1233,9 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
                             created_by=str(chat_id),
                         )
                     )
-                    res_retry = await submit_application(retry_row, token_retry)
+                    from src.orchestrator.graph import run_apply_agent_graph
+
+                    res_retry = await run_apply_agent_graph(retry_row, action="SUBMIT", confirmation_token=token_retry)
                     st_retry = res_retry.get("status")
                     err_retry = res_retry.get("error") or ""
                     is_retry_success = st_retry == "SUBMITTED"
@@ -1233,7 +1340,9 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
 
         job_row = await asyncio.to_thread(_fetch_restore)
         if job_row:
-            asyncio.create_task(resume_job_interest_after_crash(job_row, is_edit=False))
+            asyncio.create_task(
+                _process_job_interest(job_row, chat_id, is_edit=False, clicked_mid=clicked_mid, skip_tailor=True)
+            )
         await client.post(
             f"{TG_BASE}/answerCallbackQuery",
             json={"callback_query_id": cb_id, "text": "Edit cancelled."},
@@ -1335,7 +1444,9 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
         async def _run_submission():
             TASK_REGISTRY.set_job_stage(job_id, "Submitting application via browser")
             try:
-                res = await submit_application(job_row, token)
+                from src.orchestrator.graph import run_apply_agent_graph
+
+                res = await run_apply_agent_graph(job_row, action="SUBMIT", confirmation_token=token)
                 st = res.get("status")
                 err = res.get("error") or ""
 
@@ -1398,10 +1509,115 @@ async def _handle_single_update(client: httpx.AsyncClient, upd: dict) -> None:
         if job_row:
             await client.post(
                 f"{TG_BASE}/answerCallbackQuery",
-                json={"callback_query_id": cb_id, "text": "Re-analyzing website..."},
+                json={"callback_query_id": cb_id, "text": "Re-analyzing website (keeping your resume)..."},
             )
-            asyncio.create_task(_process_job_interest(job_row, chat_id, clicked_mid=clicked_mid))
+            asyncio.create_task(
+                _process_job_interest(job_row, chat_id, clicked_mid=clicked_mid, skip_tailor=True)
+            )
         return
+
+    # Skip Reason Picker Menu (Web/Telegram parity with Intelligent Learning Gate)
+    if payload.startswith("skip_menu:"):
+        try:
+            job_id = int(payload.split(":", 1)[1])
+        except ValueError:
+            return
+        await client.post(
+            f"{TG_BASE}/answerCallbackQuery",
+            json={"callback_query_id": cb_id, "text": "Select skip reason:"},
+        )
+        await upsert_job_rich_card(
+            client=client,
+            chat_id=chat_id,
+            job_id=job_id,
+            markdown_body=(
+                f"📝 *Why are you skipping Job #{job_id}?*\n\n"
+                "Choose a reason below so the OKF Brain only learns durable preferences "
+                "(e.g. *Expired / Closed* won't distort your calibration):"
+            ),
+            inline_keyboard=build_skip_reason_keyboard(job_id),
+            try_edit_text_only=True,
+            clicked_mid=clicked_mid,
+        )
+        return
+
+    if payload.startswith("skip_note:"):
+        try:
+            job_id = int(payload.split(":", 1)[1])
+        except ValueError:
+            return
+        _ACTIVE_SKIP_NOTE_JOB[chat_id] = job_id
+        await client.post(
+            f"{TG_BASE}/answerCallbackQuery",
+            json={"callback_query_id": cb_id, "text": "Reply with your custom skip reason:"},
+        )
+        await upsert_job_rich_card(
+            client=client,
+            chat_id=chat_id,
+            job_id=job_id,
+            markdown_body=(
+                f"✍️ *Custom Skip Reason for Job #{job_id}*\n\n"
+                "Send your reason in the next message (e.g. `Too senior, requires 8+ years` or `Link expired / busy today`).\n"
+                "Relentless will automatically decide whether to teach the OKF Brain or ignore ephemeral noise."
+            ),
+            inline_keyboard=[[{"text": "⬅️ Cancel", "callback_data": f"skip_cancel:{job_id}"}]],
+            try_edit_text_only=True,
+            clicked_mid=clicked_mid,
+        )
+        return
+
+    if payload.startswith("skip_cancel:"):
+        try:
+            job_id = int(payload.split(":", 1)[1])
+        except ValueError:
+            return
+        _ACTIVE_SKIP_NOTE_JOB.pop(chat_id, None)
+        await client.post(
+            f"{TG_BASE}/answerCallbackQuery",
+            json={"callback_query_id": cb_id, "text": "Cancelled skip."},
+        )
+        await upsert_job_rich_card(
+            client=client,
+            chat_id=chat_id,
+            job_id=job_id,
+            markdown_body=f"🎯 *Job #{job_id}* — Ready for your decision:",
+            inline_keyboard=build_inline_keyboard(job_id),
+            try_edit_text_only=True,
+            clicked_mid=clicked_mid,
+        )
+        return
+
+    if payload.startswith("skipr:"):
+        parts = payload.split(":")
+        if len(parts) == 3:
+            reason_cat = parts[1].strip().upper()
+            try:
+                job_id = int(parts[2])
+            except ValueError:
+                return
+            action = "SKIP_SCAM" if reason_cat == "SCAM_OR_BAD_COMPANY" else "SKIP_BAD_FIT"
+            try:
+                res = await record_job_action(
+                    job_id,
+                    action,
+                    actor_source="telegram",
+                    chat_id=chat_id,
+                    clicked_mid=clicked_mid,
+                    reason_category=reason_cat if reason_cat in SKIP_REASON_CATEGORIES else None,
+                )
+                toast = (
+                    "🗑️ Skipped (learned)"
+                    if res.get("learned_from_action")
+                    else "🗑️ Skipped (ignored for learning)"
+                )
+            except Exception as e:
+                logger.error("Failed structured skip for job #%s: %s", job_id, e)
+                toast = "Skipped"
+            await client.post(
+                f"{TG_BASE}/answerCallbackQuery",
+                json={"callback_query_id": cb_id, "text": toast},
+            )
+            return
 
     # Skip Bad Fit / Skip Scam / Drop Job / Callback
     parts = payload.split(":")

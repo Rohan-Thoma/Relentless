@@ -1,18 +1,56 @@
+from __future__ import annotations
+
 import logging
+from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 
 from src.apply.llm_form_agent import dismiss_popups_and_open_form
+from src.config import load_config
 
 logger = logging.getLogger(__name__)
+
+# Portals that require authenticated accounts or block automated headless submissions.
+MANUAL_ONLY_HOSTS: tuple[str, ...] = (
+    "linkedin.com",
+    "naukri.com",
+    "indeed.com",
+    "glassdoor.com",
+    "myworkdayjobs.com",
+    "instahyre.com",
+    "wellfound.com",
+)
 
 
 def _playwright():
     return async_playwright
 
 
+def detect_aggregator_shell(url: str) -> tuple[str, str] | None:
+    """Fast URL pre-flight check so headless Playwright never wastes time on LinkedIn/Naukri/Workday shells."""
+    if not url:
+        return ("MANUAL_APPLY", "missing application URL")
+    host = (urlparse(url).hostname or "").lower()
+    for blocked in MANUAL_ONLY_HOSTS:
+        if host == blocked or host.endswith("." + blocked):
+            return (
+                "MANUAL_APPLY",
+                f"Portal ({host}) requires user account/login — open direct URL and upload tailored PDF manually.",
+            )
+    return None
+
+
 async def _analyze_page_dom(page) -> tuple[str, str]:
-    """Inspects live DOM using page.evaluate to distinguish real login/captcha walls from navbar links."""
+    """Inspects live DOM strictly inside non-navigation application regions.
+
+    Never misclassifies site-wide search bars (<nav>/<header>) or bare 'Apply' marketing links
+    as ready application forms, and strictly enforces config.automation.max_free_text_questions.
+    """
+    try:
+        max_free_text = int(load_config().automation.max_free_text_questions)
+    except Exception:
+        max_free_text = 2
+
     info = await page.evaluate(
         """() => {
         const isVisible = (el) => {
@@ -23,7 +61,19 @@ async def _analyze_page_dom(page) -> tuple[str, str]:
             return rect.width > 0 && rect.height > 0;
         };
 
-        // 1. Check for visible blocking CAPTCHA iframes/widgets (ignore invisible v3 badges)
+        const isChromeOrSearch = (el) => {
+            if (!el) return true;
+            if (el.closest('header, nav, footer, [role="navigation"], [role="search"], [role="banner"]')) return true;
+            const type = (el.getAttribute('type') || '').toLowerCase();
+            if (type === 'search') return true;
+            const meta = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+            if (meta.includes('search') || meta.includes('keyword') || meta.includes('filter jobs')) return true;
+            return false;
+        };
+
+        const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+
+        // 1. Check for blocking CAPTCHA / WAF / Bot verification walls
         const captchaSelectors = [
             'iframe[src*="hcaptcha.com"]',
             'iframe[src*="challenges.cloudflare.com"]',
@@ -42,37 +92,54 @@ async def _analyze_page_dom(page) -> tuple[str, str]:
                 }
             }
         }
+        if (
+            bodyText.includes('performing security verification') ||
+            bodyText.includes('verify you are human') ||
+            bodyText.includes('access denied') && bodyText.includes('permission to access')
+        ) {
+            hasBlockingCaptcha = true;
+        }
 
-        // 2. Look for candidate application inputs (file upload, email, name, etc.)
-        const allInputs = Array.from(document.querySelectorAll('input, textarea, select')).filter(isVisible);
-        const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')); // file inputs are often styled hidden
-        const emailInputs = allInputs.filter(el =>
-            el.type === 'email' ||
-            (el.name || '').toLowerCase().includes('email') ||
-            (el.placeholder || '').toLowerCase().includes('email')
-        );
-        const passwordInputs = allInputs.filter(el => el.type === 'password');
+        // 2. Look strictly for genuine applicant inputs (excluding header/nav/search bars!)
+        const rawInputs = Array.from(document.querySelectorAll('input, textarea, select')).filter(el => isVisible(el) && !isChromeOrSearch(el));
+        const fileInputs = Array.from(document.querySelectorAll('input[type="file"]')).filter(el => !el.closest('header, nav, footer'));
+        const emailInputs = rawInputs.filter(el => {
+            const meta = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '')).toLowerCase();
+            return el.type === 'email' || meta.includes('email');
+        });
+        const nameInputs = rawInputs.filter(el => {
+            const meta = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '')).toLowerCase();
+            return meta.includes('first_name') || meta.includes('firstname') || meta.includes('full_name') || meta.includes('fullname') || meta.includes('applicant');
+        });
+        const passwordInputs = Array.from(document.querySelectorAll('input[type="password"]')).filter(isVisible);
 
-        // Check for submit or apply buttons
-        const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a[role="button"]')).filter(isVisible);
+        // Submit buttons inside forms or main content (never nav 'Sign in')
+        const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a[role="button"]'))
+            .filter(el => isVisible(el) && !el.closest('header, nav, footer'));
         const hasSubmitBtn = buttons.some(b => {
             const t = (b.innerText || b.value || '').toLowerCase();
-            return b.type === 'submit' || t.includes('submit') || t.includes('apply');
+            return b.type === 'submit' || t.includes('submit application') || t.includes('submit') || t.includes('apply');
         });
 
-        const hasAppForm = (fileInputs.length > 0 || emailInputs.length > 0) && hasSubmitBtn;
+        // STRICT requirement: must have real applicant inputs (file upload OR email OR name) AND submit button!
+        const hasAppForm = (fileInputs.length > 0 || emailInputs.length > 0 || nameInputs.length > 0) && hasSubmitBtn;
 
-        // 3. Only flag NEEDS_LOGIN if there is a visible password field AND no accessible application form,
-        // or the main heading explicitly demands sign-in without any application inputs.
-        const h1Text = Array.from(document.querySelectorAll('h1, h2')).map(h => (h.innerText || '').toLowerCase()).join(' ');
-        const explicitLoginHeading = (h1Text.includes('sign in to apply') || h1Text.includes('log in to apply') || h1Text.includes('login required'));
+        // 3. Login wall detection
+        const h1Text = Array.from(document.querySelectorAll('h1, h2, h3')).map(h => (h.innerText || '').toLowerCase()).join(' ');
+        const explicitLoginHeading = (
+            h1Text.includes('sign in to apply') ||
+            h1Text.includes('log in to apply') ||
+            h1Text.includes('login required') ||
+            h1Text.includes('join or sign in') ||
+            h1Text.includes('create an account')
+        );
         const needsLogin = (!hasAppForm && passwordInputs.length > 0) || (!hasAppForm && explicitLoginHeading);
 
-        // 4. Count only REQUIRED custom free-text textareas (ignore optional cover letter / notes)
-        const textareas = Array.from(document.querySelectorAll('textarea')).filter(isVisible);
+        // 4. Count required custom free-text essay textareas (excluding optional cover letter/notes)
+        const textareas = rawInputs.filter(el => el.tagName.toLowerCase() === 'textarea');
         const requiredEssays = textareas.filter(ta => {
-            const name = ((ta.name || '') + ' ' + (ta.id || '') + ' ' + (ta.placeholder || '')).toLowerCase();
-            const isCoverLetter = name.includes('cover') || name.includes('note') || name.includes('additional');
+            const meta = ((ta.name || '') + ' ' + (ta.id || '') + ' ' + (ta.placeholder || '')).toLowerCase();
+            const isCoverLetter = meta.includes('cover') || meta.includes('note') || meta.includes('additional');
             const isRequired = ta.required || ta.getAttribute('aria-required') === 'true';
             return isRequired && !isCoverLetter;
         });
@@ -81,7 +148,7 @@ async def _analyze_page_dom(page) -> tuple[str, str]:
             hasBlockingCaptcha,
             hasAppForm,
             needsLogin,
-            totalVisibleInputs: allInputs.length,
+            totalVisibleInputs: rawInputs.length,
             requiredEssayCount: requiredEssays.length,
             fileInputCount: fileInputs.length,
             hasSubmitBtn
@@ -89,19 +156,26 @@ async def _analyze_page_dom(page) -> tuple[str, str]:
     }"""
     )
     if info["hasBlockingCaptcha"]:
-        return ("CAPTCHA", "blocking captcha challenge detected")
+        return ("CAPTCHA", "blocking captcha or bot-verification challenge detected (human handoff required)")
     if info["needsLogin"]:
-        return ("NEEDS_LOGIN", "login wall detected (password required before form)")
-    if info["requiredEssayCount"] > 3:
-        return ("COMPLEX", f"{info['requiredEssayCount']} required essay question(s) present")
-    if info["totalVisibleInputs"] > 30:
+        return ("NEEDS_LOGIN", "login wall detected (password or account required before form)")
+    if info["requiredEssayCount"] > max_free_text:
+        return (
+            "COMPLEX",
+            f"{info['requiredEssayCount']} required essay question(s) exceed automation.max_free_text_questions ({max_free_text})",
+        )
+    if info["totalVisibleInputs"] > 35:
         return ("COMPLEX", f"too many form fields ({info['totalVisibleInputs']})")
-    if info["hasAppForm"] or info["hasSubmitBtn"]:
+    if info["hasAppForm"]:
         return ("AUTO_SIMPLE", "public application form ready")
-    return ("NEEDS_REVIEW", "no direct form inputs found on landing page")
+    return ("NEEDS_REVIEW", "no direct application form inputs found on page (only landing page or external redirect)")
 
 
-async def classify(url: str):
+async def classify(url: str) -> tuple[str, str]:
+    shell = detect_aggregator_shell(url)
+    if shell is not None:
+        return shell
+
     ap = _playwright()
     if ap is None:
         return ("BLOCKED", "playwright not installed")
@@ -109,14 +183,19 @@ async def classify(url: str):
         async with ap() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-            await page.goto(url, timeout=30000)
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
             target = await dismiss_popups_and_open_form(page)
             status, reason = await _analyze_page_dom(target)
 
-            # If no direct form on landing page, check if there's an "Apply" button/link that opens the form
             if status == "NEEDS_REVIEW":
                 apply_btn = await target.query_selector(
-                    "a:has-text('Apply'), button:has-text('Apply'), [role=button]:has-text('Apply')"
+                    "main a:has-text('Apply'), main button:has-text('Apply'), "
+                    "button:has-text('Apply for this job'), a:has-text('Apply for this job'), "
+                    "button:has-text('Apply Now'), a:has-text('Apply Now')"
                 )
                 if apply_btn:
                     try:
